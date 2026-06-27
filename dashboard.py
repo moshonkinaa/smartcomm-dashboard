@@ -1,0 +1,1942 @@
+#!/usr/bin/env python3
+"""iRidium Pi5 diagnostic dashboard backend."""
+import json
+import os
+import re
+import subprocess
+import threading
+import time
+import urllib.error
+import urllib.request
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache, wraps
+from pathlib import Path
+
+from flask import Flask, jsonify, send_from_directory, make_response, request, redirect
+
+import network as network_bp
+import mikrotik as mt
+
+
+# ============ AUTH декораторы и helper'ы ============
+
+def _get_session():
+    """Прочитать сессию из cookie. Возвращает dict или None."""
+    sid = request.cookies.get("sc_session")
+    if not sid:
+        return None
+    return network_bp.auth_get_session(sid)
+
+
+def _client_ip():
+    """X-Forwarded-For-aware client IP."""
+    xff = request.headers.get("X-Forwarded-For", "")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.remote_addr or "?"
+
+
+def requires_auth(f):
+    """API-endpoint: 401 если нет сессии. Страница: redirect на /login."""
+    @wraps(f)
+    def wrapper(*a, **kw):
+        sess = _get_session()
+        if not sess:
+            if request.path.startswith("/api/"):
+                return jsonify({"ok": False, "error": "unauthorized"}), 401
+            return redirect("/login?next=" + request.full_path.rstrip("?"))
+        request.auth_user = sess
+        return f(*a, **kw)
+    return wrapper
+
+
+def requires_admin(f):
+    @wraps(f)
+    def wrapper(*a, **kw):
+        sess = _get_session()
+        if not sess:
+            return jsonify({"ok": False, "error": "unauthorized"}), 401
+        user = network_bp.auth_get_user(sess["username"])
+        if not user or not user.get("is_admin"):
+            return jsonify({"ok": False, "error": "forbidden — admin only"}), 403
+        request.auth_user = sess
+        return f(*a, **kw)
+    return wrapper
+
+
+def audit_action(action_name, target_from_path=False, log_details=None):
+    """Декоратор: пишет в auth_audit при вызове endpoint'а.
+    target_from_path=True — берёт target из request.path."""
+    def deco(f):
+        @wraps(f)
+        def wrapper(*a, **kw):
+            sess = _get_session()
+            username = sess["username"] if sess else None
+            ip = _client_ip()
+            target = request.path if target_from_path else None
+            result = "success"
+            try:
+                resp = f(*a, **kw)
+                # Если у Flask response status >= 400 — пометим как fail
+                try:
+                    status = resp.status_code if hasattr(resp, "status_code") \
+                             else (resp[1] if isinstance(resp, tuple) else 200)
+                    if status >= 400:
+                        result = "fail"
+                except Exception:
+                    pass
+                return resp
+            except Exception:
+                result = "fail"
+                raise
+            finally:
+                details = None
+                if log_details:
+                    try:
+                        details = log_details()
+                    except Exception:
+                        pass
+                network_bp.auth_log(username, ip, action_name, target,
+                                    details, result)
+        return wrapper
+    return deco
+
+VERSION = "1.0.0"
+RELEASE_DATE = "2026-06-27"
+GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
+
+app = Flask(__name__)
+
+# gzip compression for API + HTML — ~10x reduction for /api/network/devices
+try:
+    from flask_compress import Compress
+    Compress(app)
+except ImportError:
+    pass
+
+app.register_blueprint(network_bp.bp)
+
+
+# ============ Глобальная защита: все endpoints требуют auth ============
+# Кроме whitelist'а (login page, auth API, статика, чарт, manifest, SW).
+# Это catch-all — даже если я забыл @requires_auth на каком-то endpoint'е.
+_AUTH_PUBLIC_PATHS = {
+    "/login", "/api/auth/login", "/api/auth/logout", "/api/auth/me",
+    "/sw.js", "/manifest.json", "/chart.min.js", "/favicon.ico",
+    "/marked.min.js",
+}
+
+@app.before_request
+def _global_auth_gate():
+    p = request.path
+    if p in _AUTH_PUBLIC_PATHS:
+        return None
+    if request.method == "OPTIONS":
+        return None
+    sess = _get_session()
+    if sess:
+        request.auth_user = sess
+        return None
+    # Не залогинен:
+    if p.startswith("/api/"):
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    # HTML страница — редирект на логин
+    return redirect("/login?next=" + p)
+BASE = Path(__file__).resolve().parent
+
+# Pool reused across requests to avoid thread create/destroy churn.
+_EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="dash")
+
+
+def time_cache(ttl_sec):
+    """Per-args time-based cache for expensive subprocess wrappers."""
+    def decorator(fn):
+        store = {}
+        lock = threading.Lock()
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            key = (args, tuple(sorted(kwargs.items())))
+            now = time.time()
+            with lock:
+                hit = store.get(key)
+                if hit and (now - hit[0]) < ttl_sec:
+                    return hit[1]
+            result = fn(*args, **kwargs)
+            with lock:
+                store[key] = (now, result)
+            return result
+        return wrapper
+    return decorator
+
+
+@app.after_request
+def cache_headers(resp):
+    """Long cache for static JS/CSS, no-cache for HTML and API."""
+    p = request.path or ""
+    if p.endswith(".js") or p.endswith(".css") or p.endswith(".png") or p.endswith(".ico"):
+        resp.headers["Cache-Control"] = "public, max-age=86400, immutable"
+    else:
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+    return resp
+
+def _mkbuf(n):
+    return {
+        "ts":   deque(maxlen=n),
+        "temp": deque(maxlen=n),
+        "cpu":  deque(maxlen=n),
+        "ram":  deque(maxlen=n),
+        "disk": deque(maxlen=n),
+        "net":  deque(maxlen=n),   # KB/s combined rx+tx
+    }
+
+
+HISTORY_1H  = _mkbuf(60)    # 60 × 60s = 1 hour
+HISTORY_24H = _mkbuf(288)   # 288 × 5min = 24 hours
+LOCK = threading.Lock()
+PREV_CPU = None
+PREV_CPU_CORES = {}
+PREV_NET = {"rx": 0, "tx": 0, "ts": time.time()}
+
+# ============ Persisted metrics history (survives restarts) ============
+METRICS_DB = "/var/lib/smartcomm-dashboard/metrics.db"
+
+def _metrics_db():
+    import sqlite3
+    con = sqlite3.connect(METRICS_DB, timeout=5, check_same_thread=False)
+    con.execute("PRAGMA journal_mode=WAL")
+    con.execute("""CREATE TABLE IF NOT EXISTS samples (
+        ts INTEGER PRIMARY KEY,
+        temp REAL, cpu REAL, ram REAL, disk REAL, net REAL
+    )""")
+    return con
+
+def _metrics_persist(ts, temp, cpu, ram, disk, net):
+    try:
+        con = _metrics_db()
+        con.execute("INSERT OR REPLACE INTO samples VALUES (?,?,?,?,?,?)",
+                    (int(ts), temp, cpu, ram, disk, net))
+        con.commit()
+        con.close()
+    except Exception:
+        pass
+
+def _metrics_cleanup(days=30):
+    try:
+        con = _metrics_db()
+        cutoff = int(time.time()) - days*86400
+        con.execute("DELETE FROM samples WHERE ts < ?", (cutoff,))
+        con.commit()
+        con.close()
+    except Exception:
+        pass
+
+def _metrics_hydrate():
+    """Pull recent samples from DB into the in-memory deques on startup."""
+    try:
+        con = _metrics_db()
+        now = int(time.time())
+        # 1h buf: last 3600 sec, max 60 points
+        rows1h = con.execute(
+            "SELECT ts,temp,cpu,ram,disk,net FROM samples WHERE ts >= ? ORDER BY ts ASC",
+            (now - 3600,)).fetchall()
+        for r in rows1h[-60:]:
+            HISTORY_1H["ts"].append(r[0]); HISTORY_1H["temp"].append(r[1])
+            HISTORY_1H["cpu"].append(r[2]); HISTORY_1H["ram"].append(r[3])
+            HISTORY_1H["disk"].append(r[4]); HISTORY_1H["net"].append(r[5])
+        # 24h buf: last 86400 sec, downsample to ~288 points (every 5 min)
+        rows24 = con.execute(
+            "SELECT ts,temp,cpu,ram,disk,net FROM samples WHERE ts >= ? ORDER BY ts ASC",
+            (now - 86400,)).fetchall()
+        last_bucket = -1
+        for r in rows24:
+            bucket = r[0] // 300   # 5-min buckets
+            if bucket == last_bucket:
+                continue
+            last_bucket = bucket
+            HISTORY_24H["ts"].append(r[0]); HISTORY_24H["temp"].append(r[1])
+            HISTORY_24H["cpu"].append(r[2]); HISTORY_24H["ram"].append(r[3])
+            HISTORY_24H["disk"].append(r[4]); HISTORY_24H["net"].append(r[5])
+        con.close()
+        print(f"[metrics] hydrated {len(HISTORY_1H['ts'])} (1h) + {len(HISTORY_24H['ts'])} (24h) points from {METRICS_DB}")
+    except Exception as e:
+        print(f"[metrics] hydrate skipped: {e}")
+
+
+def sh(cmd, timeout=5):
+    try:
+        return subprocess.run(cmd, shell=True, capture_output=True,
+                              text=True, timeout=timeout).stdout.strip()
+    except Exception:
+        return ""
+
+
+def vcgen(arg):
+    return sh(f"vcgencmd {arg}")
+
+
+def cpu_temp_c():
+    o = vcgen("measure_temp")
+    m = re.search(r"=([\d.]+)", o)
+    return float(m.group(1)) if m else None
+
+
+def cpu_freq_mhz():
+    o = vcgen("measure_clock arm")
+    m = re.search(r"=(\d+)", o)
+    return int(m.group(1)) // 1_000_000 if m else None
+
+
+def core_volt_v():
+    o = vcgen("measure_volts core")
+    m = re.search(r"=([\d.]+)", o)
+    return float(m.group(1)) if m else None
+
+
+def throttled():
+    o = vcgen("get_throttled")
+    m = re.search(r"=(0x[\da-fA-F]+)", o)
+    raw = m.group(1) if m else "0x0"
+    val = int(raw, 16)
+    return raw, {
+        "undervolt_now": bool(val & 0x1),
+        "freq_capped_now": bool(val & 0x2),
+        "throttled_now": bool(val & 0x4),
+        "soft_temp_now": bool(val & 0x8),
+        "undervolt_ever": bool(val & 0x10000),
+        "freq_capped_ever": bool(val & 0x20000),
+        "throttled_ever": bool(val & 0x40000),
+        "soft_temp_ever": bool(val & 0x80000),
+    }
+
+
+def loadavg():
+    try:
+        with open("/proc/loadavg") as f:
+            return f.read().split()[:3]
+    except Exception:
+        return ["0", "0", "0"]
+
+
+def uptime_sec():
+    try:
+        with open("/proc/uptime") as f:
+            return float(f.read().split()[0])
+    except Exception:
+        return 0
+
+
+def fmt_uptime(s):
+    s = int(s)
+    d, s = divmod(s, 86400)
+    h, s = divmod(s, 3600)
+    m = s // 60
+    if d > 0:
+        return f"{d} д {h} ч {m} мин"
+    if h > 0:
+        return f"{h} ч {m} мин"
+    return f"{m} мин"
+
+
+def mem_info():
+    info = {}
+    try:
+        with open("/proc/meminfo") as f:
+            for ln in f:
+                k, _, v = ln.partition(":")
+                info[k.strip()] = int(v.strip().split()[0]) * 1024
+    except Exception:
+        pass
+    total = info.get("MemTotal", 0)
+    avail = info.get("MemAvailable", 0)
+    used = total - avail
+    swap_total = info.get("SwapTotal", 0)
+    swap_free = info.get("SwapFree", 0)
+    return {
+        "total": total,
+        "used": used,
+        "percent": round(100 * used / total, 1) if total else 0,
+        "swap_total": swap_total,
+        "swap_used": swap_total - swap_free,
+    }
+
+
+def cpu_usage_pct():
+    global PREV_CPU
+    try:
+        with open("/proc/stat") as f:
+            parts = list(map(int, f.readline().split()[1:8]))
+        total = sum(parts)
+        idle = parts[3] + parts[4]
+        if PREV_CPU:
+            dt = total - PREV_CPU[0]
+            di = idle - PREV_CPU[1]
+            pct = round(100 * (dt - di) / dt, 1) if dt else 0
+        else:
+            pct = 0
+        PREV_CPU = (total, idle)
+        return pct
+    except Exception:
+        return 0
+
+
+def cpu_usage_per_core():
+    """Returns list of % usage per core, e.g. [12.3, 8.1, 0.5, 1.2]."""
+    result = []
+    try:
+        with open("/proc/stat") as f:
+            for ln in f:
+                if not ln.startswith("cpu") or ln.startswith("cpu "):
+                    continue
+                parts = ln.split()
+                name = parts[0]
+                vals = list(map(int, parts[1:8]))
+                total = sum(vals)
+                idle = vals[3] + vals[4]
+                prev = PREV_CPU_CORES.get(name)
+                if prev:
+                    dt = total - prev[0]
+                    di = idle - prev[1]
+                    pct = round(100 * (dt - di) / dt, 1) if dt else 0
+                else:
+                    pct = 0
+                PREV_CPU_CORES[name] = (total, idle)
+                result.append(pct)
+    except Exception:
+        pass
+    return result
+
+
+def disk_info(path="/"):
+    try:
+        st = os.statvfs(path)
+        total = st.f_blocks * st.f_frsize
+        free = st.f_bavail * st.f_frsize
+        used = total - free
+        return {
+            "total": total,
+            "used": used,
+            "percent": round(100 * used / total, 1) if total else 0,
+        }
+    except Exception:
+        return {"total": 0, "used": 0, "percent": 0}
+
+
+def net_rate(iface="eth0"):
+    global PREV_NET
+    try:
+        with open("/proc/net/dev") as f:
+            for ln in f:
+                if iface in ln:
+                    fields = ln.split(":")[1].split()
+                    rx, tx = int(fields[0]), int(fields[8])
+                    now = time.time()
+                    dt = max(0.5, now - PREV_NET["ts"])
+                    drx = max(0, rx - PREV_NET["rx"])
+                    dtx = max(0, tx - PREV_NET["tx"])
+                    rx_rate = int(drx / dt)
+                    tx_rate = int(dtx / dt)
+                    PREV_NET = {"rx": rx, "tx": tx, "ts": now}
+                    return rx_rate, tx_rate, rx, tx
+    except Exception:
+        pass
+    return 0, 0, 0, 0
+
+
+def process_uptime_sec(pid):
+    """Real process uptime via ps -o etimes (more accurate than systemd
+    ActiveEnterTimestamp when service has watchdog/auto-restart)."""
+    if not pid or pid == "0":
+        return None
+    out = sh(f"ps -o etimes= -p {pid} 2>/dev/null").strip()
+    try:
+        return int(out)
+    except (ValueError, TypeError):
+        return None
+
+
+@time_cache(5)
+def service_status(name):
+    """One systemctl call (4 properties) + 1 ps for uptime — instead of 5 calls."""
+    out = sh(
+        f"systemctl show -p ActiveState -p UnitFileState -p MainPID "
+        f"-p ActiveEnterTimestamp {name}"
+    )
+    props = {}
+    for line in out.splitlines():
+        if "=" in line:
+            k, _, v = line.partition("=")
+            props[k.strip()] = v.strip()
+    pid = props.get("MainPID", "0") or "0"
+    if not pid.isdigit() or int(pid) <= 0:
+        pid = "0"
+    up = process_uptime_sec(pid) if pid != "0" else None
+    return {
+        "active":     props.get("ActiveState", "unknown") or "unknown",
+        "enabled":    props.get("UnitFileState", "unknown") or "unknown",
+        "pid":        pid,
+        "started":    props.get("ActiveEnterTimestamp", ""),
+        "uptime_sec": up,
+        "uptime_fmt": fmt_uptime(up) if up is not None else None,
+    }
+
+
+@time_cache(5)
+def top_processes(n=5, by="cpu"):
+    key = "-%cpu" if by == "cpu" else "-%mem"
+    out = sh(f"ps -eo pid,user,%cpu,%mem,comm --sort={key} --no-headers | head -{n}")
+    result = []
+    for ln in out.splitlines():
+        parts = ln.split(None, 4)
+        if len(parts) >= 5:
+            try:
+                result.append({
+                    "pid": parts[0],
+                    "user": parts[1],
+                    "cpu": float(parts[2]),
+                    "mem": float(parts[3]),
+                    "cmd": parts[4][:40],
+                })
+            except ValueError:
+                pass
+    return result
+
+
+@time_cache(5)
+def iridium_connections():
+    """Established TCP conns to/from iridium. Needs sudo because iridium runs
+    as root; without sudo, ss-as-pi-user shows no process info for them."""
+    out = sh("sudo ss -tn state established 'process_name like \"%iridium%\"' 2>/dev/null")
+    if not out or "Local Address" not in out:
+        # fallback: get all established + grep iridium-tagged ones
+        out = sh("sudo ss -tnp state established 2>/dev/null")
+    result = []
+    for ln in out.splitlines():
+        if "iridium" not in ln and "Local Address" not in ln:
+            continue
+        if "Local Address" in ln:
+            continue
+        parts = ln.split()
+        if len(parts) >= 4:
+            # ss -tn state X (no header): Recv-Q Send-Q Local Peer  (+ optional users:)
+            # ss -tnp           : columns shifted by 0 or 1 depending on header presence
+            # robust extraction: take first thing that looks like "IP:port"
+            ip_cols = [c for c in parts if ":" in c and not c.startswith("users:")]
+            if len(ip_cols) >= 2:
+                result.append({"state": "ESTAB", "local": ip_cols[0], "peer": ip_cols[1]})
+    return result[:20]
+
+
+def fan_percent():
+    """Best-effort: read fan PWM from Argon I2C register."""
+    out = sh("i2cget -y 1 0x1a 2>/dev/null")
+    m = re.search(r"0x([\da-fA-F]+)", out)
+    if m:
+        try:
+            v = int(m.group(1), 16)
+            if 0 <= v <= 100:
+                return v
+        except ValueError:
+            pass
+    return None
+
+
+@time_cache(5)
+def iridium_recent_log(n=5):
+    # -r = reverse (newest first) — matches the user's "по убыванию даты"
+    out = sh(f"journalctl -u irserver -n {n} -r --no-pager 2>/dev/null")
+    return out.splitlines()[:n] if out else []
+
+
+@time_cache(60)
+def argon_installed():
+    """Argon ONE V3 case is present iff its handler script + service exist."""
+    if not os.path.exists("/etc/argon/argonpowerbutton.py"):
+        return False
+    active = sh("systemctl is-active argononed 2>/dev/null").strip()
+    return active == "active"
+
+
+@lru_cache(maxsize=1)
+def platform_name():
+    """Hardware platform string: Raspberry Pi model, DMI product or hostname."""
+    # Raspberry Pi exposes model via device-tree
+    try:
+        with open("/proc/device-tree/model") as f:
+            model = f.read().strip().rstrip("\x00")
+        if model:
+            return model
+    except Exception:
+        pass
+    # x86 mini-PC: DMI product name (e.g. "Cubi 5 12M")
+    try:
+        with open("/sys/devices/virtual/dmi/id/product_name") as f:
+            name = f.read().strip()
+        if name and name.lower() not in (
+            "to be filled by o.e.m.", "default string", "system product name", "none"
+        ):
+            try:
+                with open("/sys/devices/virtual/dmi/id/sys_vendor") as f:
+                    vendor = f.read().strip()
+                if vendor and vendor.lower() not in (
+                    "to be filled by o.e.m.", "default string", "system manufacturer"
+                ):
+                    return f"{vendor} {name}"
+            except Exception:
+                pass
+            return name
+    except Exception:
+        pass
+    return os.uname().nodename
+
+
+@time_cache(10)
+def iridium_log_meta():
+    """Age of latest entry + per-minute / per-5min rates. ONE journalctl call:
+    fetch last 5 min in unix-timestamp format, count + find max in Python."""
+    out = sh(
+        "journalctl -u irserver --since '5 minutes ago' -o short-unix "
+        "--no-pager 2>/dev/null",
+        timeout=8,
+    )
+    timestamps = []
+    for ln in out.splitlines():
+        head = ln.split(None, 1)[0] if ln else ""
+        try:
+            timestamps.append(float(head))
+        except ValueError:
+            pass
+    now = time.time()
+    if not timestamps:
+        return {"latest_age_sec": None, "per_min": 0, "per_5min": 0}
+    return {
+        "latest_age_sec": int(now - max(timestamps)),
+        "per_min":  sum(1 for t in timestamps if t > now - 60),
+        "per_5min": len(timestamps),
+    }
+
+
+def button_recent_log(n=5):
+    return sh(f"tail -n {n} /var/log/argon-button.log 2>/dev/null").splitlines()
+
+
+# ============ iRidium-specific info from OS ============
+
+IR_DOCS = "/var/lib/iRidium Server/Documents"
+IR_DB   = "/var/lib/iRidium Server/DataBase/IridiumStorageV4.db"
+IR_BIN  = "/iridiumserver/iridium"
+
+
+@lru_cache(maxsize=1)
+def iridium_version():
+    """Parse 'Server Version: Pro or Lite:42647 (Jun  1 2026, 10:32:17)'.
+    Cached — binary version doesn't change while service runs."""
+    out = sh(f"sudo {IR_BIN} --version 2>&1 | head -1", timeout=10)
+    m = re.search(r"Server Version:\s*(.+?):(\d+)\s*\(([^)]+)\)", out)
+    if m:
+        return {"edition": m.group(1).strip(), "build": m.group(2), "date": m.group(3)}
+    return None
+
+
+@time_cache(60)
+def iridium_project_info():
+    """Find the .irpz project file in Documents/. Returns name + size.
+    Also tries to read the human-friendly project name from inside the
+    .irpz (which is a zip archive with Project.xml or similar)."""
+    import zipfile
+    try:
+        for fn in sorted(os.listdir(IR_DOCS)):
+            if fn.startswith("Project_") and fn.endswith(".irpz"):
+                path = os.path.join(IR_DOCS, fn)
+                info = {
+                    "name": fn[:-5],
+                    "filename": fn,
+                    "size": os.path.getsize(path),
+                    "mtime": int(os.path.getmtime(path)),
+                    "friendly_name": None,
+                }
+                # Try to extract human-readable project name from inside the irpz.
+                # Search order: known files → all xml files (limit 8KB head).
+                priority = ("project.xml", "project.json", "manifest.xml",
+                            "info.xml", "config.xml")
+                try:
+                    with zipfile.ZipFile(path) as z:
+                        names = z.namelist()
+                        ordered = [n for n in names
+                                   if os.path.basename(n).lower() in priority]
+                        ordered += [n for n in names
+                                    if n.lower().endswith(".xml")
+                                    and n not in ordered]
+                        for inner in ordered[:6]:
+                            try:
+                                with z.open(inner) as f:
+                                    head = f.read(8192).decode("utf-8", "ignore")
+                            except Exception:
+                                continue
+                            for pat in (
+                                r'(?:project[_-]?name|projectName|appName|app[_-]?name|projectTitle|title)\s*=\s*["\']([^"\']{3,80})["\']',
+                                r'<(?:project[_-]?name|projectName|appName|projectTitle|title)[^>]*>([^<]{3,80})<',
+                                r'\bname\s*=\s*["\']([^"\']{3,80})["\']',
+                            ):
+                                m = re.search(pat, head, re.IGNORECASE)
+                                if m:
+                                    val = m.group(1).strip()
+                                    if val and val.lower() not in ("xml", "value", "object", "page"):
+                                        info["friendly_name"] = val
+                                        break
+                            if info["friendly_name"]:
+                                break
+                except Exception:
+                    pass
+                return info
+    except (FileNotFoundError, PermissionError):
+        pass
+    return None
+
+
+# iRidium listens on these — used to count "real client connections"
+IRIDIUM_PORTS = ("8888", "8443", "30464", "30465", "30583")
+
+
+@time_cache(5)
+def iridium_clients_count():
+    """How many established TCP sessions hit iRidium client/web ports."""
+    out = sh("sudo ss -tn state established 2>/dev/null")
+    n = 0
+    for ln in out.splitlines():
+        parts = ln.split()
+        if len(parts) < 4:
+            continue
+        local = parts[2] if len(parts) >= 3 else parts[-2]
+        # Local addr ends with :PORT — last colon-separated chunk
+        port = local.rsplit(":", 1)[-1] if ":" in local else ""
+        if port in IRIDIUM_PORTS:
+            n += 1
+    return n
+
+
+@time_cache(60)
+def iridium_db_size():
+    try:
+        return os.path.getsize(IR_DB)
+    except (FileNotFoundError, PermissionError):
+        return None
+
+
+@time_cache(5)
+def iridium_proc_info(pid):
+    if not pid or pid == "0":
+        return None
+    try:
+        with open(f"/proc/{pid}/status") as f:
+            data = f.read()
+        m_rss = re.search(r"VmRSS:\s+(\d+)\s+kB", data)
+        m_th  = re.search(r"Threads:\s+(\d+)", data)
+        m_vm  = re.search(r"VmSize:\s+(\d+)\s+kB", data)
+        return {
+            "rss_kb":   int(m_rss.group(1)) if m_rss else None,
+            "vm_kb":    int(m_vm.group(1))  if m_vm  else None,
+            "threads":  int(m_th.group(1))  if m_th  else None,
+        }
+    except (FileNotFoundError, PermissionError):
+        return None
+
+
+# Состояние портала :8888 — обновляется фоновым потоком, читается мгновенно
+# из памяти. Не блокируем waitress-worker'ов синхронным HTTP-вызовом к iRidium
+# (который может тупить из-за GC / скрипт-багов в проекте клиента).
+_IR_HTTP_STATE = {"data": {"alive": None, "error": "ещё не проверен"},
+                  "ts": 0.0, "lock": threading.Lock()}
+
+def _iridium_http_check_now():
+    """Один TCP+HTTP probe к :8888 с timeout 2 сек."""
+    try:
+        import urllib.request, socket
+        t0 = time.time()
+        req = urllib.request.Request("http://127.0.0.1:8888/")
+        with urllib.request.urlopen(req, timeout=2) as r:
+            ms = int((time.time() - t0) * 1000)
+            return {"alive": True, "code": r.getcode(), "ms": ms}
+    except urllib.error.HTTPError as e:
+        ms = int((time.time() - t0) * 1000)
+        return {"alive": True, "code": e.code, "ms": ms}
+    except Exception as e:
+        return {"alive": False, "error": str(e)[:80]}
+
+def iridium_http_check():
+    """Мгновенное чтение из RAM — не блокирует HTTP-worker."""
+    with _IR_HTTP_STATE["lock"]:
+        return dict(_IR_HTTP_STATE["data"])
+
+def _iridium_http_sampler():
+    """Фоновый поток: каждые 10 сек дёргает iRidium :8888 и обновляет _IR_HTTP_STATE."""
+    while True:
+        try:
+            d = _iridium_http_check_now()
+            with _IR_HTTP_STATE["lock"]:
+                _IR_HTTP_STATE["data"] = d
+                _IR_HTTP_STATE["ts"] = time.time()
+        except Exception:
+            pass
+        time.sleep(10)
+
+
+def iridium_info(pid):
+    return {
+        "version": iridium_version(),
+        "project": iridium_project_info(),
+        "db_size": iridium_db_size(),
+        "proc":    iridium_proc_info(pid),
+        "clients": iridium_clients_count(),
+        "http":    iridium_http_check(),
+        "api":     iridium_api_snapshot(),
+    }
+
+
+# ============ iRidium HTTP API integration ============
+# Reverse-engineered: POST /html/login.html with form data sets 'ir-session-id' cookie,
+# then GET /json/{module}/.../get returns JSON (text/plain content-type).
+
+_IR_SESSION = {"cookie": None, "obtained_at": 0, "lock": threading.Lock()}
+IR_LOGIN_URL = "http://127.0.0.1:8888/html/login.html"
+IR_BASE      = "http://127.0.0.1:8888"
+
+
+def _ir_login():
+    """POST credentials, return new session cookie or None.
+    Uses CookieJar so 'ir-session-id' is captured even before the 301 redirect
+    to /html/main is followed."""
+    pw = network_bp.setting_get("iridium_password", "")
+    if not pw:
+        return None
+    user = network_bp.setting_get("iridium_username", "admin") or "admin"
+    try:
+        import urllib.request, urllib.parse, http.cookiejar
+        data = urllib.parse.urlencode({
+            "name": "authform", "Login": user, "Password": pw
+        }).encode()
+        jar = http.cookiejar.CookieJar()
+        opener = urllib.request.build_opener(
+            urllib.request.HTTPCookieProcessor(jar)
+        )
+        req = urllib.request.Request(IR_LOGIN_URL, data=data, method="POST")
+        req.add_header("Content-Type", "application/x-www-form-urlencoded")
+        try:
+            opener.open(req, timeout=6)
+        except Exception:
+            pass    # the 301 → /html/main may 404 with this client; cookie is already in jar
+        for c in jar:
+            if c.name == "ir-session-id":
+                return c.value
+    except Exception:
+        return None
+    return None
+
+
+def _ir_get_cookie():
+    """Get current session cookie; relogin if missing or older than 30 min.
+    Логин выполняется ВНУТРИ lock'а — иначе 6 параллельных _ir_get запросов
+    делают 6 параллельных POST на /html/login.html, iRidium выдаёт 6 разных
+    session-id, и каждый следующий инвалидирует предыдущий → часть запросов
+    падает с auth failed."""
+    with _IR_SESSION["lock"]:
+        now = time.time()
+        if _IR_SESSION["cookie"] and (now - _IR_SESSION["obtained_at"]) < 1800:
+            return _IR_SESSION["cookie"]
+        new = _ir_login()
+        _IR_SESSION["cookie"] = new
+        _IR_SESSION["obtained_at"] = now
+        return new
+
+
+def _ir_get(path):
+    """GET /json/... with cookie. Returns parsed JSON or None on auth/error."""
+    cookie = _ir_get_cookie()
+    if not cookie:
+        return None
+    try:
+        import urllib.request, json as _json
+        req = urllib.request.Request(IR_BASE + path)
+        req.add_header("Cookie", f"ir-session-id={cookie}")
+        with urllib.request.urlopen(req, timeout=5) as r:
+            raw = r.read()
+        # iRidium server возвращает Cyrillic в CP1251 (Win-1251), не UTF-8 —
+        # fallback при ошибке декодирования.
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            text = raw.decode("cp1251", "replace")
+        return _json.loads(text)
+    except Exception:
+        with _IR_SESSION["lock"]:
+            _IR_SESSION["cookie"] = None
+        return None
+
+
+_IR_API_CACHE = {"data": None, "ts": 0.0,
+                 "last_good": None, "last_good_ts": 0.0,
+                 "lock": threading.Lock()}
+# Stale-while-revalidate: показываем last_good этот период, даже если новый
+# вызов упал. Скрывает кратковременные хиккапы iRidium (GC pauses, скрипт-баги).
+IR_STALE_GRACE_SEC = 300   # 5 минут
+
+def iridium_api_snapshot():
+    """Мгновенное чтение последнего snapshot'а из RAM — НЕ блокирует
+    waitress-worker'ов синхронным HTTP-вызовом к iRidium API.
+    Snapshot обновляется фоновым потоком _iridium_api_sampler каждые 30 сек."""
+    with _IR_API_CACHE["lock"]:
+        if _IR_API_CACHE["data"] is None:
+            return {"configured": bool(network_bp.setting_get("iridium_password", "")),
+                    "ok": False, "error": "ещё не опрошен (запустился только что)"}
+        return _IR_API_CACHE["data"]
+
+
+def _iridium_api_refresh():
+    """Один тик: вызвать impl, обновить кеш и last_good. Может занять до 11 сек
+    в худшем случае (login 6с + GET 5с с retry), но это в background-потоке."""
+    now = time.time()
+    result = _iridium_api_snapshot_impl()
+    with _IR_API_CACHE["lock"]:
+        if result.get("ok"):
+            _IR_API_CACHE["data"] = result
+            _IR_API_CACHE["ts"] = now
+            _IR_API_CACHE["last_good"] = result
+            _IR_API_CACHE["last_good_ts"] = now
+        else:
+            lg = _IR_API_CACHE["last_good"]
+            lg_age = now - _IR_API_CACHE["last_good_ts"]
+            if lg is not None and lg_age < IR_STALE_GRACE_SEC:
+                stale_copy = dict(lg)
+                stale_copy["stale"] = True
+                stale_copy["stale_age_sec"] = int(lg_age)
+                stale_copy["last_error"] = result.get("error")
+                _IR_API_CACHE["data"] = stale_copy
+            else:
+                _IR_API_CACHE["data"] = result
+            _IR_API_CACHE["ts"] = now
+
+
+def _iridium_api_sampler():
+    """Фоновый поток: 30-сек шаг. Снимает данные iRidium API, обновляет кеш."""
+    while True:
+        try:
+            _iridium_api_refresh()
+        except Exception:
+            pass
+        time.sleep(30)
+
+
+def _iridium_api_snapshot_impl():
+    pw_configured = bool(network_bp.setting_get("iridium_password", ""))
+    if not pw_configured:
+        return {"configured": False}
+    eps = [
+        "/json/main/systemmenu/get",
+        "/json/info/systemmenu/get",
+        "/json/licence/licence/get",
+        "/json/current_project/project/get",
+        "/json/devices/devices/get",
+        "/json/tags/server/tags/get",
+    ]
+    def _try_all():
+        futures = [_EXECUTOR.submit(_ir_get, ep) for ep in eps]
+        return [f.result() or {} for f in futures]
+    results = _try_all()
+    # Retry один раз через 200 мс если ВСЕ упали — защита от GC pause iRidium
+    if all(not r for r in results):
+        time.sleep(0.2)
+        # Сбрасываем cookie чтобы новый _ir_get сделал свежий login
+        with _IR_SESSION["lock"]:
+            _IR_SESSION["cookie"] = None
+        results = _try_all()
+    main, info, licence, project, devices, tags = results
+    if not main and not licence:
+        return {"configured": True, "ok": False, "error": "iRidium API не отвечает (GC pause? скрипт-баг?)"}
+    return {
+        "configured": True,
+        "ok": True,
+        "username": main.get("username"),
+        "server_time": main.get("server_time"),
+        "platform_iridium": main.get("platform"),
+        "build_full": (main.get("buildversion", "") + ":"
+                       + main.get("buildnumber", "")),
+        "system": info.get("system"),   # [serial, hostname, os, arch, model, docs, bin, logs]
+        "licence": {
+            "type": licence.get("type"),
+            "server_max_clients": licence.get("server_max_clients"),
+            "datapoints": licence.get("datapoints"),
+            "serial": licence.get("serial"),
+            "expired": licence.get("expired"),
+            "products": licence.get("products") or [],
+            "qr_mode": licence.get("qr_mode"),
+            "script_mode": licence.get("script_mode"),
+        },
+        "project": {
+            "cloud_id": project.get("cloud_id"),
+            "name": project.get("name"),
+            "type": project.get("type"),
+            "status": project.get("status"),
+            "run_time": project.get("run_time"),
+            "guid": project.get("GUID"),
+        },
+        "devices": {
+            "count": devices.get("device_count"),
+            "names": devices.get("device_names") or [],
+        },
+        "tags": {
+            "count": tags.get("tags_count"),
+        },
+    }
+
+
+# ============ HEALTH CHECKS ============
+
+def ntp_status():
+    out = sh("timedatectl show -p NTPSynchronized --value").strip().lower()
+    return out == "yes"
+
+
+def failed_units_list():
+    out = sh("systemctl --failed --no-legend --plain")
+    result = []
+    for ln in out.splitlines():
+        parts = ln.split()
+        if parts and parts[0].endswith((".service", ".target", ".socket", ".timer", ".mount")):
+            result.append(parts[0])
+    return result
+
+
+def reboot_required_info():
+    if not os.path.exists("/var/run/reboot-required"):
+        return {"required": False, "pkgs": []}
+    pkgs = []
+    try:
+        with open("/var/run/reboot-required.pkgs") as f:
+            pkgs = [p.strip() for p in f if p.strip()]
+    except Exception:
+        pass
+    return {"required": True, "pkgs": pkgs}
+
+
+def dmesg_errors(n=5):
+    out = sh(
+        f"sudo dmesg -l err,crit,alert,emerg --color=never -T 2>/dev/null | tail -{n}",
+        timeout=10,
+    )
+    return [ln for ln in out.splitlines() if ln.strip()]
+
+
+def root_block_device():
+    out = sh("findmnt -n -o SOURCE /").strip()
+    if not out:
+        return None
+    if "mmcblk" in out or "nvme" in out:
+        return re.sub(r"p\d+$", "", out)
+    return re.sub(r"\d+$", "", out)
+
+
+def _read_sysfs(path):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except Exception:
+        return None
+
+
+def _decode_mmc_date(raw):
+    """MMC/SD date register MMYYYY (e.g., '06/2023')."""
+    if not raw:
+        return None
+    if "/" in raw:
+        return raw
+    return raw
+
+
+def sdcard_health():
+    """eMMC has real SMART via extcsd; plain SD cards do not (hardware
+    limitation). We detect type and return what's actually readable."""
+    dev = root_block_device()
+    if not dev or "mmcblk" not in dev:
+        return None
+    short = dev.replace("/dev/", "")
+    base = f"/sys/block/{short}/device"
+    card_type = _read_sysfs(f"{base}/type") or "?"
+    info = {
+        "device": dev,
+        "card_type": card_type,
+        "name": _read_sysfs(f"{base}/name"),
+        "manfid": _read_sysfs(f"{base}/manfid"),
+        "date": _decode_mmc_date(_read_sysfs(f"{base}/date")),
+        "fwrev": _read_sysfs(f"{base}/fwrev"),
+        "hwrev": _read_sysfs(f"{base}/hwrev"),
+        "size_h": sh(f"lsblk -dno SIZE {dev} 2>/dev/null").strip(),
+    }
+    # Known manufacturer IDs
+    manuf_map = {
+        "0x000003": "SanDisk", "0x00001b": "Samsung",
+        "0x000027": "Phison", "0x000028": "Lexar",
+        "0x000041": "Kingston", "0x000074": "Transcend",
+        "0x00009f": "GoodRam", "0x0000ad": "Longsys",
+        "0x000074": "PNY", "0x0000fe": "Micron",
+    }
+    info["manufacturer"] = manuf_map.get(info["manfid"], info["manfid"] or "?")
+
+    # Try eMMC SMART (only works on eMMC, not SD)
+    if card_type.upper() == "MMC":
+        out = sh(f"sudo mmc extcsd read {dev} 2>/dev/null", timeout=8)
+        if out:
+            eol_names = {0: "не использовалось", 1: "норма",
+                         2: "предупреждение (≤80% жизни)",
+                         3: "критично — менять срочно"}
+            for ln in out.splitlines():
+                if "PRE_EOL_INFO" in ln:
+                    m = re.search(r"0x([\da-fA-F]+)", ln)
+                    if m:
+                        v = int(m.group(1), 16)
+                        info["pre_eol_raw"] = v
+                        info["pre_eol"] = eol_names.get(v, f"unknown ({v})")
+                elif "DEVICE_LIFE_TIME_EST_TYP_A" in ln:
+                    m = re.search(r"0x([\da-fA-F]+)", ln)
+                    if m:
+                        v = int(m.group(1), 16)
+                        if 1 <= v <= 10:
+                            info["life_a_pct_max"] = v * 10
+                        elif v == 11:
+                            info["life_a_pct_max"] = 110
+    return info
+
+
+_UPDATES = {"ts": 0, "count": None, "ok": False}
+
+
+def _updates_refresher():
+    while True:
+        try:
+            out = sh("apt list --upgradable 2>/dev/null", timeout=120)
+            count = len([l for l in out.splitlines() if "/" in l and "upgradable" in l])
+            _UPDATES["count"] = count
+            _UPDATES["ts"] = int(time.time())
+            _UPDATES["ok"] = True
+        except Exception:
+            _UPDATES["ok"] = False
+        time.sleep(6 * 3600)
+
+
+threading.Thread(target=_updates_refresher, daemon=True).start()
+
+
+_HEALTH = {"ts": 0, "data": None}
+
+
+def health_summary():
+    now = time.time()
+    if _HEALTH["data"] and (now - _HEALTH["ts"]) < 30:
+        return _HEALTH["data"]
+    data = {
+        "ntp_synced": ntp_status(),
+        "failed_units": failed_units_list(),
+        "reboot": reboot_required_info(),
+        "updates": {
+            "count": _UPDATES["count"],
+            "ts": _UPDATES["ts"],
+            "fresh": _UPDATES["ok"],
+        },
+        "dmesg_errors": dmesg_errors(5),
+        "sdcard": sdcard_health(),
+    }
+    _HEALTH["ts"] = now
+    _HEALTH["data"] = data
+    return data
+
+
+def _push_sample(buf, ts, t, c, m_pct, d_pct, net_kbps):
+    buf["ts"].append(ts);    buf["temp"].append(t)
+    buf["cpu"].append(c);    buf["ram"].append(m_pct)
+    buf["disk"].append(d_pct); buf["net"].append(net_kbps)
+
+
+def sampler():
+    """Единый sampler: 60-сек шаг. Пишет в RAM (1h-буфер) и SQLite.
+    24h-буфер обновляется каждые 5 итераций (5 мин)."""
+    tick = 0
+    while True:
+        try:
+            t = cpu_temp_c()
+            c = cpu_usage_pct()
+            m = mem_info()
+            d = disk_info("/")
+            rx_rate, tx_rate, _, _ = net_rate()
+            net_kbps = round((rx_rate + tx_rate) / 1024, 2)
+            ts = int(time.time())
+            with LOCK:
+                _push_sample(HISTORY_1H, ts, t, c, m.get("percent"), d.get("percent"), net_kbps)
+                if tick % 5 == 0:
+                    _push_sample(HISTORY_24H, ts, t, c, m.get("percent"), d.get("percent"), net_kbps)
+            _metrics_persist(ts, t, c, m.get("percent"), d.get("percent"), net_kbps)
+            # раз в час чистим старше 30 дней
+            if tick % 60 == 0 and tick > 0:
+                _metrics_cleanup(30)
+        except Exception:
+            pass
+        tick += 1
+        time.sleep(60)
+
+
+_metrics_hydrate()
+threading.Thread(target=sampler, daemon=True).start()
+# MikroTik: подгрузить историю из БД и запустить sampler (30-сек шаг)
+mt.mt_hydrate()
+threading.Thread(target=mt.mt_sampler, args=(network_bp,), daemon=True).start()
+# MikroTik DHCP comments → имена устройств в карте сети, раз в час
+threading.Thread(target=mt.mt_auto_sync_loop, args=(network_bp,), daemon=True).start()
+# iRidium HTTP probe (порт :8888) — раз в 10 сек в фоне
+threading.Thread(target=_iridium_http_sampler, daemon=True).start()
+# iRidium API snapshot (лицензия, проект, устройства) — раз в 30 сек в фоне
+threading.Thread(target=_iridium_api_sampler, daemon=True).start()
+
+
+@app.route("/")
+@requires_auth
+def index():
+    return send_from_directory(BASE, "index.html")
+
+
+@app.route("/client")
+@requires_auth
+def client_view():
+    """Read-only view — same HTML, frontend hides action buttons via ?ro=1."""
+    return send_from_directory(BASE, "index.html")
+
+
+@app.route("/manifest.json")
+def manifest():
+    return send_from_directory(BASE, "manifest.json")
+
+
+@app.route("/sw.js")
+def sw():
+    return send_from_directory(BASE, "sw.js")
+
+
+@app.route("/marked.min.js")
+def marked_js():
+    return send_from_directory(BASE, "marked.min.js")
+
+
+@app.route("/api/iridium/settings", methods=["GET"])
+def get_iridium_settings():
+    """Tell frontend whether iRidium creds are configured (don't leak password)."""
+    pw = network_bp.setting_get("iridium_password", "")
+    user = network_bp.setting_get("iridium_username", "admin")
+    return jsonify({
+        "configured": bool(pw),
+        "username": user or "admin",
+        "password_set": bool(pw),
+    })
+
+
+@app.route("/api/iridium/settings", methods=["PUT"])
+@requires_auth
+@audit_action("settings_iridium_changed", target_from_path=True)
+def put_iridium_settings():
+    d = request.get_json(force=True) or {}
+    if "password" in d:
+        network_bp.setting_set("iridium_password", d["password"] or "")
+    if "username" in d:
+        network_bp.setting_set("iridium_username", d["username"] or "admin")
+    # Drop cached cookie so next API call re-logs in with new creds
+    with _IR_SESSION["lock"]:
+        _IR_SESSION["cookie"] = None
+    # Test it
+    # Bypass cache при смене пароля — вызываем impl напрямую
+    with _IR_API_CACHE["lock"]:
+        _IR_API_CACHE["data"] = None
+    snap = _iridium_api_snapshot_impl()
+    return jsonify({"ok": True, "test": snap})
+
+
+@app.route("/api/mikrotik/status")
+def api_mikrotik_status():
+    return jsonify(mt.mt_status_snapshot(network_bp))
+
+
+@app.route("/api/mikrotik/settings", methods=["GET"])
+def get_mikrotik_settings():
+    default_ip = mt._default_mt_ip(network_bp)
+    return jsonify({
+        "ip": network_bp.setting_get("mikrotik_ip", default_ip) or default_ip,
+        "user": network_bp.setting_get("mikrotik_user", "admin") or "admin",
+        "configured": bool(network_bp.setting_get("mikrotik_password", "")),
+        "detected_gateway": network_bp.detect_gateway(),  # для UI placeholder
+    })
+
+
+@app.route("/api/mikrotik/settings", methods=["PUT"])
+@requires_auth
+@audit_action("settings_mikrotik_changed", target_from_path=True)
+def put_mikrotik_settings():
+    d = request.get_json(force=True) or {}
+    default_ip = mt._default_mt_ip(network_bp)
+    if "ip" in d:
+        network_bp.setting_set("mikrotik_ip", d["ip"] or default_ip)
+    if "user" in d:
+        network_bp.setting_set("mikrotik_user", d["user"] or "admin")
+    if "password" in d:
+        network_bp.setting_set("mikrotik_password", d["password"] or "")
+    # Сброс кеша чтобы сразу подхватить новые креды
+    with mt._CACHE_LOCK:
+        mt._CACHE.clear()
+    test = mt.mt_status_snapshot(network_bp)
+    return jsonify({"ok": True, "test": test})
+
+
+@app.route("/api/mikrotik/history")
+def api_mikrotik_history():
+    rng = request.args.get("range", "1h")
+    return jsonify(mt.mt_history(rng))
+
+
+@app.route("/api/mikrotik/sync", methods=["POST"])
+@requires_auth
+@audit_action("mikrotik_sync", target_from_path=True)
+def api_mikrotik_sync():
+    """Синхронизируем DHCP comments → имена устройств. Override always."""
+    network_bp.DB_PATH = network_bp.DB_PATH  # noqa - убедиться что атрибут есть
+    return jsonify(mt.sync_dhcp_to_inventory(network_bp))
+
+
+@app.route("/chart.min.js")
+def chart_js():
+    return send_from_directory(BASE, "chart.min.js")
+
+
+@app.route("/api/status")
+def api_status():
+    # Fan out independent slow subprocess calls in parallel.
+    # Light/local calls (mem_info, disk_info, cpu_usage_pct, vcgencmd…)
+    # stay sequential — they touch /proc and complete in <2 ms each.
+    f_irsrv     = _EXECUTOR.submit(service_status, "irserver")
+    f_argon_sv  = _EXECUTOR.submit(service_status, "argononed")
+    f_top_cpu   = _EXECUTOR.submit(top_processes, 5, "cpu")
+    f_top_mem   = _EXECUTOR.submit(top_processes, 5, "mem")
+    f_iconn     = _EXECUTOR.submit(iridium_connections)
+    f_ilog      = _EXECUTOR.submit(iridium_recent_log, 50)
+    f_ilog_meta = _EXECUTOR.submit(iridium_log_meta)
+    f_argon_in  = _EXECUTOR.submit(argon_installed)
+    f_health    = _EXECUTOR.submit(health_summary)
+
+    rx_rate, tx_rate, rx_total, tx_total = net_rate()
+    throt_raw, throt = throttled()
+    irsrv = f_irsrv.result()
+    return jsonify({
+        "ts": int(time.time()),
+        "host": os.uname().nodename,
+        "platform_name": platform_name(),
+        "system": {
+            "uptime": uptime_sec(),
+            "uptime_fmt": fmt_uptime(uptime_sec()),
+            "loadavg": loadavg(),
+            "kernel": os.uname().release,
+        },
+        "cpu": {
+            "usage": cpu_usage_pct(),
+            "freq_mhz": cpu_freq_mhz(),
+            "temp_c": cpu_temp_c(),
+            "per_core": cpu_usage_per_core(),
+        },
+        "mem": mem_info(),
+        "disk_root": disk_info("/"),
+        "voltage_v": core_volt_v(),
+        "throttle": {"raw": throt_raw, "flags": throt},
+        "net": {
+            "iface": "eth0",
+            "rx_rate": rx_rate, "tx_rate": tx_rate,
+            "rx_total": rx_total, "tx_total": tx_total,
+        },
+        "irserver": irsrv,
+        "argononed": f_argon_sv.result(),
+        "fan_pct": fan_percent(),
+        "top_cpu": f_top_cpu.result(),
+        "top_mem": f_top_mem.result(),
+        "iridium_conn": f_iconn.result(),
+        "iridium_log": f_ilog.result(),
+        "iridium_log_meta": f_ilog_meta.result(),
+        "iridium_info": iridium_info(irsrv["pid"]),
+        "health": f_health.result(),
+        "argon_installed": f_argon_in.result(),
+    })
+
+
+@app.route("/api/history")
+def api_history():
+    from flask import request
+    rng = request.args.get("range", "1h")
+    buf = HISTORY_24H if rng == "24h" else HISTORY_1H
+    with LOCK:
+        ts   = list(buf["ts"])
+        temp = list(buf["temp"])
+        cpu  = list(buf["cpu"])
+        ram  = list(buf["ram"])
+        disk = list(buf["disk"])
+        net  = list(buf["net"])
+    # If buffer is empty/short on fresh restart, seed with current snapshot
+    # so sparklines render immediately instead of waiting 60s.
+    if len(ts) < 2:
+        now = int(time.time())
+        m = mem_info()
+        d = disk_info("/")
+        cur_temp = cpu_temp_c()
+        cur_cpu = cpu_usage_pct()
+        rx, tx, _, _ = net_rate()
+        cur_net = round((rx + tx) / 1024, 2)
+        # add two close points so polyline draws something
+        if not ts:
+            ts.append(now - 1); temp.append(cur_temp); cpu.append(cur_cpu)
+            ram.append(m.get("percent")); disk.append(d.get("percent"))
+            net.append(cur_net)
+        ts.append(now); temp.append(cur_temp); cpu.append(cur_cpu)
+        ram.append(m.get("percent")); disk.append(d.get("percent"))
+        net.append(cur_net)
+    return jsonify({
+        "range": rng,
+        "ts":   ts,
+        "temp": temp,
+        "cpu":  cpu,
+        "ram":  ram,
+        "disk": disk,
+        "net":  net,
+    })
+
+
+def run_cmd(cmd, message):
+    try:
+        r = subprocess.run(cmd, shell=True, capture_output=True,
+                           text=True, timeout=15)
+        return jsonify({
+            "ok": r.returncode == 0,
+            "message": message,
+            "stdout": r.stdout,
+            "stderr": r.stderr,
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "message": str(e)})
+
+
+@app.route("/api/action/restart-iridium", methods=["POST"])
+@requires_auth
+@audit_action("action_restart_iridium", target_from_path=True)
+def act_restart_iridium():
+    return run_cmd("sudo systemctl restart irserver", "iRidium service перезапущен")
+
+
+@app.route("/api/action/start-iridium", methods=["POST"])
+@requires_auth
+@audit_action("action_start_iridium", target_from_path=True)
+def act_start_iridium():
+    return run_cmd("sudo systemctl start irserver", "iRidium service запущен")
+
+
+@app.route("/api/action/stop-iridium", methods=["POST"])
+@requires_auth
+@audit_action("action_stop_iridium", target_from_path=True)
+def act_stop_iridium():
+    return run_cmd("sudo systemctl stop irserver", "iRidium service остановлен")
+
+
+@app.route("/api/action/restart-argononed", methods=["POST"])
+@requires_auth
+@audit_action("action_restart_argononed", target_from_path=True)
+def act_restart_argononed():
+    return run_cmd("sudo systemctl restart argononed", "argononed перезапущен")
+
+
+@app.route("/api/action/reboot", methods=["POST"])
+@requires_auth
+@audit_action("action_reboot_pi", target_from_path=True)
+def act_reboot():
+    subprocess.Popen("sleep 2 && sudo reboot", shell=True)
+    return jsonify({"ok": True, "message": "Pi перезагрузится через 2 сек"})
+
+
+@app.route("/api/action/shutdown", methods=["POST"])
+@requires_auth
+@audit_action("action_shutdown_pi", target_from_path=True)
+def act_shutdown():
+    subprocess.Popen("sleep 2 && sudo shutdown -h now", shell=True)
+    return jsonify({"ok": True, "message": "Pi выключится через 2 сек"})
+
+
+# ============ AUTH endpoints ============
+
+@app.route("/login")
+def page_login():
+    return send_from_directory(BASE, "login.html")
+
+
+@app.route("/api/auth/login", methods=["POST"])
+def api_auth_login():
+    d = request.get_json(force=True, silent=True) or {}
+    username = (d.get("username") or "").strip().lower()
+    password = d.get("password") or ""
+    ip = _client_ip()
+    user = network_bp.auth_get_user(username)
+    if not user or not network_bp.auth_verify_password(
+            password, user["salt"], user["password_hash"]):
+        network_bp.auth_log(username or None, ip, "login_failed",
+                            details={"username_tried": username}, result="fail")
+        return jsonify({"ok": False, "error": "Неверный логин или пароль"}), 401
+    sid = network_bp.auth_create_session(
+        username, ip, request.headers.get("User-Agent", "")[:200]
+    )
+    with network_bp.db() as c:
+        c.execute("UPDATE auth_users SET last_login=? WHERE id=?",
+                  (int(time.time()), user["id"]))
+    network_bp.auth_log(username, ip, "login_success", result="success")
+    resp = jsonify({
+        "ok": True,
+        "username": username,
+        "is_admin": bool(user["is_admin"]),
+        "must_change_password": bool(user["must_change_password"]),
+    })
+    resp.set_cookie("sc_session", sid, httponly=True, samesite="Lax",
+                    max_age=network_bp.SESSION_TTL_SEC, path="/")
+    return resp
+
+
+@app.route("/api/auth/logout", methods=["POST"])
+def api_auth_logout():
+    sid = request.cookies.get("sc_session")
+    sess = network_bp.auth_get_session(sid) if sid else None
+    if sess:
+        network_bp.auth_log(sess["username"], _client_ip(), "logout")
+        network_bp.auth_delete_session(sid)
+    resp = jsonify({"ok": True})
+    resp.delete_cookie("sc_session", path="/")
+    return resp
+
+
+@app.route("/api/auth/me", methods=["GET"])
+def api_auth_me():
+    sess = _get_session()
+    if not sess:
+        return jsonify({"ok": False, "authenticated": False}), 200
+    user = network_bp.auth_get_user(sess["username"])
+    return jsonify({
+        "ok": True,
+        "authenticated": True,
+        "username": sess["username"],
+        "is_admin": bool(user["is_admin"]) if user else False,
+        "must_change_password": bool(user["must_change_password"]) if user else False,
+        "session_created": sess["created_at"],
+        "last_seen": sess["last_seen"],
+    })
+
+
+@app.route("/api/auth/change-password", methods=["POST"])
+@requires_auth
+def api_auth_change_password():
+    d = request.get_json(force=True, silent=True) or {}
+    cur_pw = d.get("current_password") or ""
+    new_pw = d.get("new_password") or ""
+    sess = _get_session()
+    user = network_bp.auth_get_user(sess["username"])
+    if not network_bp.auth_verify_password(cur_pw, user["salt"], user["password_hash"]):
+        network_bp.auth_log(sess["username"], _client_ip(),
+                            "change_password", result="fail",
+                            details={"reason": "wrong current password"})
+        return jsonify({"ok": False, "error": "Неверный текущий пароль"}), 400
+    if len(new_pw) < 4:
+        return jsonify({"ok": False, "error": "Минимум 4 символа"}), 400
+    network_bp.auth_set_password(sess["username"], new_pw, clear_must_change=True)
+    network_bp.auth_log(sess["username"], _client_ip(),
+                        "change_password", result="success")
+    return jsonify({"ok": True})
+
+
+@app.route("/api/auth/users", methods=["GET"])
+@requires_admin
+def api_auth_users_list():
+    return jsonify({"users": network_bp.auth_list_users()})
+
+
+@app.route("/api/auth/users", methods=["POST"])
+@requires_admin
+def api_auth_users_create():
+    d = request.get_json(force=True, silent=True) or {}
+    username = (d.get("username") or "").strip().lower()
+    password = d.get("password") or ""
+    is_admin = bool(d.get("is_admin"))
+    if not username or not re.match(r"^[a-z0-9_-]{2,32}$", username):
+        return jsonify({"ok": False, "error": "Имя: 2-32 символа a-z 0-9 _ -"}), 400
+    if len(password) < 4:
+        return jsonify({"ok": False, "error": "Пароль минимум 4 символа"}), 400
+    if network_bp.auth_get_user(username):
+        return jsonify({"ok": False, "error": "Уже существует"}), 400
+    network_bp.auth_create_user(username, password, is_admin=is_admin)
+    network_bp.auth_log(request.auth_user["username"], _client_ip(),
+                        "create_user", target=username,
+                        details={"is_admin": is_admin})
+    return jsonify({"ok": True})
+
+
+@app.route("/api/auth/users/<int:uid>", methods=["DELETE"])
+@requires_admin
+def api_auth_users_delete(uid):
+    ok, err = network_bp.auth_delete_user(uid)
+    if not ok:
+        return jsonify({"ok": False, "error": err}), 400
+    network_bp.auth_log(request.auth_user["username"], _client_ip(),
+                        "delete_user", target=str(uid))
+    return jsonify({"ok": True})
+
+
+@app.route("/api/auth/users/<int:uid>/password", methods=["POST"])
+@requires_admin
+def api_auth_users_reset_password(uid):
+    """Админ сбрасывает пароль другому юзеру (без знания старого)."""
+    d = request.get_json(force=True, silent=True) or {}
+    new_pw = d.get("new_password") or ""
+    if len(new_pw) < 4:
+        return jsonify({"ok": False, "error": "Минимум 4 символа"}), 400
+    with network_bp.db() as c:
+        row = c.execute("SELECT username FROM auth_users WHERE id=?",
+                        (uid,)).fetchone()
+    if not row:
+        return jsonify({"ok": False, "error": "Пользователь не найден"}), 404
+    network_bp.auth_set_password(row["username"], new_pw, clear_must_change=False)
+    # Помечаем must_change чтобы юзер сменил при следующем входе
+    with network_bp.db() as c:
+        c.execute("UPDATE auth_users SET must_change_password=1 WHERE id=?", (uid,))
+    network_bp.auth_log(request.auth_user["username"], _client_ip(),
+                        "reset_user_password", target=row["username"])
+    return jsonify({"ok": True})
+
+
+@app.route("/api/auth/audit", methods=["GET"])
+@requires_admin
+def api_auth_audit():
+    limit = max(1, min(int(request.args.get("limit", "200")), 1000))
+    offset = max(0, int(request.args.get("offset", "0")))
+    since_ts = request.args.get("since")
+    since_ts = int(since_ts) if since_ts else None
+    username = request.args.get("username")
+    return jsonify({
+        "audit": network_bp.auth_get_audit(limit, offset, since_ts, username),
+    })
+
+
+# ============ VERSIONING + AUTO-UPDATE ============
+
+_UPDATE_STATE = {
+    "checking": False,
+    "applying": False,
+    "last_check": 0,
+    "last_check_result": None,    # {ok, latest_version, current_version, has_update, error}
+    "last_apply": None,           # {ts, from_version, to_version, ok, error}
+    "lock": threading.Lock(),
+}
+
+
+@app.route("/api/version")
+def api_version():
+    return jsonify({
+        "version": VERSION,
+        "release_date": RELEASE_DATE,
+        "repo": GITHUB_REPO,
+        "channel": "stable",
+    })
+
+
+@app.route("/api/changelog")
+def api_changelog():
+    """Отдаёт CHANGELOG.md как текст (для модалки версий)."""
+    p = BASE / "CHANGELOG.md"
+    if not p.exists():
+        return jsonify({"ok": False, "error": "changelog not found"}), 404
+    try:
+        return jsonify({
+            "ok": True,
+            "version": VERSION,
+            "markdown": p.read_text(encoding="utf-8"),
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+def _parse_semver(v):
+    """'1.2.3' → (1,2,3) or None if invalid."""
+    try:
+        parts = v.lstrip("v").split(".")
+        return tuple(int(x) for x in parts[:3])
+    except Exception:
+        return None
+
+
+def _check_github_release():
+    """Тянем последний release с GitHub. Возвращает {ok, latest_version, tag,
+    tarball_url, body} или {ok:false, error}."""
+    try:
+        import urllib.request
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+        req = urllib.request.Request(url)
+        req.add_header("User-Agent", "smartcomm-dashboard/" + VERSION)
+        req.add_header("Accept", "application/vnd.github+json")
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return {"ok": False, "error": "На GitHub ещё нет ни одного release"}
+        return {"ok": False, "error": f"HTTP {e.code}"}
+    except Exception as e:
+        return {"ok": False, "error": f"сеть: {str(e)[:120]}"}
+    tag = data.get("tag_name", "")
+    latest = _parse_semver(tag)
+    if not latest:
+        return {"ok": False, "error": f"некорректный tag {tag!r}"}
+    current = _parse_semver(VERSION)
+    return {
+        "ok": True,
+        "latest_version": ".".join(str(x) for x in latest),
+        "current_version": VERSION,
+        "has_update": latest > current,
+        "tag": tag,
+        "tarball_url": data.get("tarball_url"),
+        "release_url": data.get("html_url"),
+        "body": data.get("body", "")[:2000],
+        "published_at": data.get("published_at"),
+    }
+
+
+@app.route("/api/update/check")
+@requires_auth
+def api_update_check():
+    """Ручная проверка наличия обновлений."""
+    with _UPDATE_STATE["lock"]:
+        _UPDATE_STATE["checking"] = True
+    try:
+        result = _check_github_release()
+        _UPDATE_STATE["last_check"] = int(time.time())
+        _UPDATE_STATE["last_check_result"] = result
+        return jsonify(result)
+    finally:
+        with _UPDATE_STATE["lock"]:
+            _UPDATE_STATE["checking"] = False
+
+
+@app.route("/api/update/state")
+@requires_auth
+def api_update_state():
+    """Снимок состояния updater'а — для UI."""
+    with _UPDATE_STATE["lock"]:
+        return jsonify({
+            "version": VERSION,
+            "release_date": RELEASE_DATE,
+            "repo": GITHUB_REPO,
+            "checking": _UPDATE_STATE["checking"],
+            "applying": _UPDATE_STATE["applying"],
+            "last_check": _UPDATE_STATE["last_check"],
+            "last_check_result": _UPDATE_STATE["last_check_result"],
+            "last_apply": _UPDATE_STATE["last_apply"],
+        })
+
+
+def _apply_update(tarball_url, to_version):
+    """Скачать tarball, бекапнуть текущую папку, применить, рестартануть.
+    Возвращает (ok, message)."""
+    import urllib.request, tarfile, shutil, tempfile
+    APP = BASE
+    BACKUP = BACKUP_DIR / f"app-pre-{VERSION}-to-{to_version}-{int(time.time())}"
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            tar_path = os.path.join(tmp, "release.tar.gz")
+            req = urllib.request.Request(tarball_url)
+            req.add_header("User-Agent", "smartcomm-dashboard/" + VERSION)
+            with urllib.request.urlopen(req, timeout=60) as r:
+                with open(tar_path, "wb") as f:
+                    while chunk := r.read(8192):
+                        f.write(chunk)
+            # Распаковываем во временный каталог
+            extract_dir = os.path.join(tmp, "extract")
+            os.makedirs(extract_dir)
+            with tarfile.open(tar_path, "r:gz") as tar:
+                tar.extractall(extract_dir)
+            # GitHub tarball корневой каталог = "<owner>-<repo>-<sha>/"
+            roots = [d for d in os.listdir(extract_dir)
+                     if os.path.isdir(os.path.join(extract_dir, d))]
+            if not roots:
+                return False, "пустой tarball"
+            src_root = os.path.join(extract_dir, roots[0])
+            # Бекап текущей папки приложения
+            shutil.copytree(str(APP), str(BACKUP), dirs_exist_ok=True)
+            # Копируем новые файлы поверх (только .py, .html, .js, .json, .css, .md)
+            ext_ok = (".py", ".html", ".js", ".json", ".css", ".md", ".service",
+                      ".min.js")
+            copied = 0
+            for fname in os.listdir(src_root):
+                src_f = os.path.join(src_root, fname)
+                if not os.path.isfile(src_f):
+                    continue
+                if not fname.endswith(ext_ok):
+                    continue
+                shutil.copy2(src_f, str(APP / fname))
+                copied += 1
+            return True, f"скопировано {copied} файлов, бекап в {BACKUP}"
+    except Exception as e:
+        return False, str(e)[:200]
+
+
+@app.route("/api/update/apply", methods=["POST"])
+@requires_admin
+@audit_action("update_applied", target_from_path=True)
+def api_update_apply():
+    """Ручной запуск обновления. Скачивает tarball, заменяет файлы, рестарт."""
+    with _UPDATE_STATE["lock"]:
+        if _UPDATE_STATE["applying"]:
+            return jsonify({"ok": False, "error": "уже идёт обновление"}), 409
+        _UPDATE_STATE["applying"] = True
+    try:
+        info = _UPDATE_STATE.get("last_check_result")
+        if not info or not info.get("ok") or not info.get("has_update"):
+            info = _check_github_release()
+            if not info.get("ok"):
+                return jsonify({"ok": False, "error": info.get("error")}), 502
+            if not info.get("has_update"):
+                return jsonify({"ok": False, "error": "обновлений нет"}), 200
+        ok, msg = _apply_update(info["tarball_url"], info["latest_version"])
+        _UPDATE_STATE["last_apply"] = {
+            "ts": int(time.time()),
+            "from_version": VERSION,
+            "to_version": info["latest_version"],
+            "ok": ok,
+            "message": msg,
+        }
+        if not ok:
+            return jsonify({"ok": False, "error": msg}), 500
+        # Рестарт сервиса (асинхронно, через sleep чтобы успеть отдать response)
+        subprocess.Popen("sleep 2 && sudo systemctl restart smartcomm-dashboard",
+                         shell=True)
+        return jsonify({
+            "ok": True,
+            "message": f"обновлено до {info['latest_version']} — рестарт через 2 сек",
+            "from": VERSION,
+            "to": info["latest_version"],
+            "details": msg,
+        })
+    finally:
+        with _UPDATE_STATE["lock"]:
+            _UPDATE_STATE["applying"] = False
+
+
+def _update_check_loop():
+    """Раз в час чекаем GitHub. Auto-apply пока выключен — только notify."""
+    time.sleep(180)   # 3 минуты после старта
+    while True:
+        try:
+            result = _check_github_release()
+            _UPDATE_STATE["last_check"] = int(time.time())
+            _UPDATE_STATE["last_check_result"] = result
+            if result.get("ok") and result.get("has_update"):
+                print(f"[update] доступна новая версия "
+                      f"{result['latest_version']} (текущая {VERSION})")
+        except Exception:
+            pass
+        time.sleep(3600)
+
+
+# ============ AUTO-BACKUP + DB INTEGRITY ============
+
+BACKUP_DIR = Path(os.environ.get("STATE_DIRECTORY", "/var/lib/smartcomm-dashboard")) / "backups"
+BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+INVENTORY_DB = Path(os.environ.get("STATE_DIRECTORY", "/var/lib/smartcomm-dashboard")) / "inventory.db"
+BACKUP_RETENTION_DAYS = 30
+
+
+def db_integrity_check():
+    """Quick integrity check at startup. If fails, log error but keep running."""
+    if not INVENTORY_DB.exists():
+        return True
+    try:
+        import sqlite3
+        conn = sqlite3.connect(str(INVENTORY_DB))
+        ok = conn.execute("PRAGMA integrity_check").fetchone()[0]
+        conn.close()
+        if ok != "ok":
+            app.logger.error(f"inventory.db integrity: {ok}")
+            return False
+    except Exception as e:
+        app.logger.error(f"integrity check failed: {e}")
+        return False
+    return True
+
+
+def backup_inventory():
+    """Daily backup of inventory.db with retention."""
+    if not INVENTORY_DB.exists():
+        return
+    now = time.strftime("%Y%m%d_%H%M%S")
+    dst = BACKUP_DIR / f"inventory_{now}.db"
+    try:
+        # Use SQLite's online backup API for consistency without lock contention
+        import sqlite3
+        src = sqlite3.connect(str(INVENTORY_DB))
+        dst_conn = sqlite3.connect(str(dst))
+        with dst_conn:
+            src.backup(dst_conn)
+        dst_conn.close()
+        src.close()
+    except Exception as e:
+        app.logger.error(f"backup failed: {e}")
+        return
+    # cleanup old backups
+    cutoff = time.time() - BACKUP_RETENTION_DAYS * 86400
+    for f in BACKUP_DIR.glob("inventory_*.db"):
+        try:
+            if f.stat().st_mtime < cutoff:
+                f.unlink()
+        except Exception:
+            pass
+
+
+def _backup_loop():
+    time.sleep(300)   # wait 5 min after boot
+    while True:
+        try:
+            backup_inventory()
+        except Exception:
+            pass
+        time.sleep(24 * 3600)
+
+
+db_integrity_check()
+threading.Thread(target=_backup_loop, daemon=True).start()
+
+# AUTH: при первом старте создаём admin/admin (must_change_password=1)
+network_bp.auth_bootstrap()
+
+def _auth_cleanup_loop():
+    """Раз в сутки чистим expired sessions и старый audit-лог."""
+    time.sleep(120)
+    while True:
+        try:
+            network_bp.auth_cleanup_expired()
+        except Exception:
+            pass
+        time.sleep(86400)
+
+threading.Thread(target=_auth_cleanup_loop, daemon=True).start()
+# Updater — раз в час чекает GitHub Releases, log про доступные обновления
+threading.Thread(target=_update_check_loop, daemon=True).start()
+
+
+if __name__ == "__main__":
+    # Production WSGI: waitress — multi-threaded, без Flask dev-server bottleneck'а
+    # и без warning'а «do not use in production». Fallback на Flask dev если waitress нет.
+    try:
+        from waitress import serve
+        print(f"[server] waitress на :8080 (8 потоков)")
+        serve(app, host="0.0.0.0", port=8080, threads=8, ident="smartcomm-dashboard")
+    except ImportError:
+        print(f"[server] waitress не найден — fallback на Flask dev-server")
+        app.run(host="0.0.0.0", port=8080, debug=False, threaded=True)

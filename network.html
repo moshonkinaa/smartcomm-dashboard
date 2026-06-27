@@ -1,0 +1,1887 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0e1116">
+<title>Карта сети · SmartComm</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231f3a68'/%3E%3Ctext x='16' y='22' font-family='-apple-system,Segoe UI,sans-serif' font-size='15' font-weight='700' text-anchor='middle' fill='white'%3ESC%3C/text%3E%3C/svg%3E">
+<link rel="manifest" href="/manifest.json">
+<style>
+  :root {
+    --bg: #ffffff; --bg-card: #f7f8fa; --bg-inner: #ffffff; --bg-hover: #eef0f4;
+    --border: #e3e6ec; --text: #1a1f2c; --text-muted: #6a7383; --text-dim: #9aa1ad;
+    --accent: #1f3a68; --ok: #1D9E75; --warn: #EF9F27; --err: #E24B4A;
+    --info: #378ADD; --purple: #7F77DD;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1116; --bg-card: #181c24; --bg-inner: #11141b; --bg-hover: #232833;
+      --border: #2a3140; --text: #e6eaf2; --text-muted: #9aa3b0; --text-dim: #707582;
+      --accent: #6da8ff; --ok: #4ec894; --warn: #f2b04e; --err: #ff6b6b;
+      --info: #6da8ff; --purple: #a0a0ff;
+    }
+  }
+  /* Btn-action style — синхронизировано с дашбордом */
+  .btn-action { display: inline-flex; align-items: center; gap: 8px; padding: 10px 14px; font: inherit; font-size: 13px; font-weight: 500; border-radius: 10px; cursor: pointer; border: 1px solid; background: transparent; transition: transform 0.1s, filter 0.15s; min-height: 40px; -webkit-tap-highlight-color: transparent; }
+  .btn-action:active { transform: scale(0.96); filter: brightness(1.1); }
+  .btn-action svg { width: 18px; height: 18px; stroke-width: 1.8; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; }
+  .btn-action.c-blue   { background: rgba(55,138,221,0.12); border-color: rgba(55,138,221,0.4); color: #378ADD; }
+  .btn-action.c-purple { background: rgba(127,119,221,0.14); border-color: rgba(127,119,221,0.4); color: #7F77DD; }
+  .btn-action.c-mute   { color: var(--text-muted); border-color: var(--border); }
+  /* Explicit theme overrides via data-theme="light|dark" on <html> — синхронизировано с index.html */
+  html[data-theme="light"] {
+    --bg: #ffffff; --bg-card: #f7f8fa; --bg-inner: #ffffff; --bg-hover: #eef0f4;
+    --border: #e3e6ec; --text: #1a1f2c; --text-muted: #6a7383; --text-dim: #9aa1ad;
+    --accent: #1f3a68; --ok: #1D9E75; --warn: #EF9F27; --err: #E24B4A;
+    --info: #378ADD; --purple: #7F77DD;
+  }
+  html[data-theme="dark"] {
+    --bg: #0e1116; --bg-card: #181c24; --bg-inner: #11141b; --bg-hover: #232833;
+    --border: #2a3140; --text: #e6eaf2; --text-muted: #9aa3b0; --text-dim: #707582;
+    --accent: #6da8ff; --ok: #4ec894; --warn: #f2b04e; --err: #ff6b6b;
+    --info: #6da8ff; --purple: #a0a0ff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; -webkit-text-size-adjust: 100%; }
+  .container { max-width: 1400px; margin: 0 auto; padding: 14px; }
+
+  .header { display: flex; justify-content: space-between; align-items: center; padding: 18px 20px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; margin-bottom: 14px; gap: 12px; flex-wrap: wrap; }
+  .header h1 { font-size: 22px; font-weight: 500; margin: 0; letter-spacing: -0.2px; }
+  .header .sub { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+  .header a { color: var(--accent); text-decoration: none; }
+  .header a:hover { text-decoration: underline; }
+
+  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px; margin-bottom: 12px; }
+
+  .stats-row { display: flex; flex-wrap: wrap; gap: 18px; align-items: baseline; }
+  .stat { font-size: 12px; color: var(--text-muted); }
+  .stat strong { color: var(--text); font-weight: 500; font-size: 14px; margin-right: 4px; }
+  .stat.ok strong { color: var(--ok); }
+  .stat.err strong { color: var(--err); }
+
+  .actions-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; font: inherit; font-size: 13px; font-weight: 500; color: var(--text); background: var(--bg-inner); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; transition: background 0.15s; -webkit-tap-highlight-color: transparent; }
+  .btn:active { background: var(--bg-hover); }
+  .btn.primary { background: var(--info); color: white; border-color: var(--info); }
+  .btn.danger { color: var(--err); border-color: var(--err); }
+  .btn:disabled { opacity: 0.5; cursor: wait; }
+
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+  .chip { padding: 5px 12px; font-size: 11.5px; border-radius: 14px; background: var(--bg-inner); border: 1px solid var(--border); color: var(--text-muted); cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .chip:hover { background: var(--bg-hover); }
+  .chip.active { background: var(--info); color: white; border-color: var(--info); }
+
+  input[type="text"], input[type="password"], select, textarea {
+    width: 100%; padding: 8px 10px; font: inherit; font-size: 13px;
+    background: var(--bg-inner); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; outline: none;
+  }
+  input:focus, select:focus, textarea:focus { border-color: var(--info); }
+  textarea { resize: vertical; min-height: 60px; font-family: inherit; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  thead th { text-align: left; font-weight: 400; color: var(--text-muted); padding: 10px 8px; font-size: 11px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg-card); }
+  thead th.sortable { cursor: pointer; user-select: none; -webkit-user-select: none; }
+  thead th.sortable:hover { color: var(--text); }
+  thead th.sortable .arr { display: inline-block; margin-left: 4px; opacity: 0.3; font-size: 9px; }
+  thead th.sortable.sorted { color: var(--text); }
+  thead th.sortable.sorted .arr { opacity: 1; color: var(--info); }
+  tbody td { padding: 10px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  tbody tr.dev-row { cursor: pointer; transition: background 0.1s; }
+  tbody tr.dev-row:hover { background: var(--bg-hover); }
+  tbody tr.dev-row.expanded { background: var(--bg-hover); }
+  tbody tr.dev-row.expanded td { border-bottom: none; }
+  tbody tr.detail-row td { padding: 0; }
+
+  .dev-icon { display: inline-flex; width: 30px; height: 30px; border-radius: 7px; background: var(--bg-inner); align-items: center; justify-content: center; font-size: 15px; color: var(--text-muted); }
+  td.name-cell { max-width: 220px; }
+  .dev-name { font-weight: 500; color: var(--text); margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dev-host { font-size: 11px; color: var(--text-dim); margin: 2px 0 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mono { font-family: var(--mono); font-size: 12px; }
+
+  .pill { display: inline-block; padding: 2px 9px; font-size: 10.5px; border-radius: 11px; background: var(--bg-inner); color: var(--text-muted); border: 1px solid var(--border); }
+  .pill.ok { background: rgba(29,158,117,0.13); color: var(--ok); border-color: rgba(29,158,117,0.35); }
+  .pill.off { background: rgba(226,75,74,0.13); color: var(--err); border-color: rgba(226,75,74,0.35); }
+  .pill.cam { background: rgba(127,119,221,0.13); color: var(--purple); border-color: rgba(127,119,221,0.3); }
+  .pill.controller { background: rgba(31,58,104,0.13); color: var(--accent); border-color: rgba(31,58,104,0.3); }
+  .pill.network { background: rgba(10,122,138,0.13); color: #0a7a8a; border-color: rgba(10,122,138,0.3); }
+  .pill.iot { background: rgba(187,125,0,0.13); color: #BA7517; border-color: rgba(187,125,0,0.3); }
+  .pill.panel { background: rgba(55,138,221,0.13); color: var(--info); border-color: rgba(55,138,221,0.3); }
+
+  .detail-panel { background: var(--bg-inner); padding: 14px 16px; border-radius: 10px; margin: 4px 8px 14px 40px; border: 1px solid var(--border); }
+  .detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px 16px; }
+  .field { display: flex; flex-direction: column; gap: 3px; }
+  .field-label { font-size: 10.5px; color: var(--text-muted); }
+  .field-static { font-size: 12.5px; color: var(--text); padding: 4px 0; }
+  .field input, .field select, .field textarea { padding: 6px 8px; font-size: 12.5px; }
+  .field textarea { min-height: 40px; }
+  .section-title { font-size: 11px; color: var(--text-muted); margin: 12px 0 6px; font-weight: 500; }
+  .creds-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .creds-table td { padding: 4px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  .creds-table input { padding: 4px 6px; font-size: 12px; width: 100%; box-sizing: border-box; }
+  .creds-row-actions { white-space: nowrap; }
+  .creds-row-actions button { padding: 3px 7px; font-size: 11px; }
+  .monitor-cb { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; user-select: none; -webkit-user-select: none; }
+  .monitor-cb.on { background: rgba(29,158,117,0.13); border-color: rgba(29,158,117,0.4); color: var(--ok); }
+  .monitor-cb input { margin: 0; }
+  .tag-chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; margin: 2px 4px 2px 0; font-size: 11.5px; background: var(--bg); border: 1px solid var(--border); border-radius: 11px; }
+  .tag-chip .x { color: var(--text-dim); cursor: pointer; padding: 0 2px; }
+  .tag-chip .x:hover { color: var(--err); }
+  .tag-input { display: inline-block; min-width: 100px; border: none !important; padding: 3px 6px !important; background: transparent !important; outline: none; font-size: 12px; }
+  .photo-thumb { width: 80px; height: 80px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); cursor: pointer; }
+  .photo-gallery { display: flex; flex-wrap: wrap; gap: 8px; padding: 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); min-height: 96px; align-items: flex-start; }
+  .photo-tile { position: relative; width: 80px; height: 80px; }
+  .photo-tile img { width: 100%; height: 100%; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); cursor: pointer; display: block; }
+  .photo-del { position: absolute; top: -6px; right: -6px; width: 20px; height: 20px; border-radius: 50%; background: var(--err); color: white; border: none; cursor: pointer; font-size: 14px; line-height: 18px; padding: 0; box-shadow: 0 1px 3px rgba(0,0,0,0.3); opacity: 0; transition: opacity 0.15s; }
+  .photo-tile:hover .photo-del { opacity: 1; }
+  @media (hover: none) { .photo-del { opacity: 1; } }
+  .photo-add { display: inline-flex; align-items: center; justify-content: center; width: 80px; height: 80px; border: 2px dashed var(--border); border-radius: 8px; background: transparent; color: var(--text-dim); cursor: pointer; font-size: 28px; font-weight: 300; user-select: none; transition: border-color 0.15s, color 0.15s; }
+  .photo-add:hover { border-color: var(--accent); color: var(--accent); }
+  .audit-list { font-size: 11px; max-height: 150px; overflow-y: auto; }
+  .audit-row { padding: 4px 0; border-bottom: 1px solid var(--border); display: flex; gap: 8px; }
+  .audit-row .when { color: var(--text-dim); font-family: var(--mono); min-width: 92px; }
+  .audit-row .act { font-weight: 500; min-width: 80px; }
+  .audit-row .det { color: var(--text-muted); flex: 1; word-break: break-word; }
+  .view-toggle { display: inline-flex; background: var(--bg-inner); border: 1px solid var(--border); border-radius: 8px; padding: 2px; margin-left: 8px; }
+  .view-toggle button { padding: 5px 12px; font: inherit; font-size: 11px; font-weight: 500; border: none; background: transparent; color: var(--text-muted); cursor: pointer; border-radius: 6px; }
+  .view-toggle button.active { background: var(--bg-hover); color: var(--text); }
+  /* Subnet IP map: 16 × 16 grid */
+  .ipmap-wrap { padding: 8px; }
+  .ipmap-grid { display: grid; grid-template-columns: repeat(16, 1fr); gap: 2px; max-width: 720px; font-family: var(--mono); font-size: 10px; }
+  .ipmap-cell { position: relative; aspect-ratio: 1.4 / 1; min-height: 26px; background: var(--bg-inner); border: 1px solid var(--border); border-radius: 3px; display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--text-dim); transition: transform 0.06s; }
+  .ipmap-cell .dot { position: absolute; bottom: 2px; right: 2px; width: 6px; height: 6px; border-radius: 50%; box-shadow: 0 0 0 1px rgba(0,0,0,0.35); }
+  .ipmap-cell .dot.on  { background: #1D9E75; }
+  .ipmap-cell .dot.off { background: #E24B4A; }
+  .ipmap-cell:hover { transform: scale(1.08); border-color: var(--info); }
+  /* Фон = тип адреса (static / dynamic), точка справа-снизу = статус (online/offline) */
+  .ipmap-cell.t-static  { background: rgba(29,158,117,0.4);  color: white; border-color: rgba(29,158,117,0.6); }
+  .ipmap-cell.t-dynamic { background: rgba(239,159,39,0.35); color: white; border-color: rgba(239,159,39,0.55); }
+  .ipmap-cell.t-gateway { background: rgba(166,108,53,0.55); color: white; border-color: rgba(166,108,53,0.8); }
+  .ipmap-cell.self { background: #5BC5E0; color: white; border-color: #3FB0CC; }
+  .ipmap-legend { display: flex; gap: 14px; margin-top: 10px; font-size: 11px; color: var(--text-muted); flex-wrap: wrap; }
+  .ipmap-legend span { display: inline-flex; align-items: center; gap: 4px; }
+  .ipmap-filters { display: flex; gap: 12px; flex-wrap: wrap; margin: 6px 0 10px; font-size: 12px; color: var(--text-muted); }
+  .ipmap-filters label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; user-select: none; padding: 4px 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg); }
+  .ipmap-filters label:hover { border-color: var(--accent); }
+  .ipmap-filters input { margin: 0; }
+  .ipmap-filters .sw { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+  .ipmap-filters .sw-static  { background: rgba(29,158,117,0.6); }
+  .ipmap-filters .sw-dynamic { background: rgba(239,159,39,0.55); }
+  .ipmap-filters .dot-sw { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+  .ipmap-filters .dot-on  { background: #1D9E75; }
+  .ipmap-filters .dot-off { background: #E24B4A; }
+  .ipmap-legend .l-self::before { background: var(--info); }
+  .md-render { font-size: 12.5px; line-height: 1.5; color: var(--text); padding: 6px 8px; background: var(--bg); border-radius: 6px; border: 1px solid var(--border); min-height: 36px; }
+  .md-render code { font-family: var(--mono); background: var(--bg-hover); padding: 1px 4px; border-radius: 3px; }
+  .md-render a { color: var(--info); }
+  .md-render ul { padding-left: 18px; margin: 4px 0; }
+  .creds-row { display: flex; gap: 6px; align-items: center; }
+  .creds-row input { flex: 1; }
+  .icon-btn { padding: 6px 10px; font-size: 11px; background: var(--bg); border: 1px solid var(--border); color: var(--text-muted); border-radius: 6px; cursor: pointer; }
+
+  .empty { text-align: center; padding: 40px 20px; color: var(--text-dim); }
+  .empty h3 { font-weight: 500; font-size: 16px; color: var(--text-muted); margin: 0 0 8px; }
+
+  .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); padding: 12px 22px; background: var(--accent); color: white; border-radius: 10px; font-size: 13px; opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 100; max-width: 90vw; }
+  .toast.show { opacity: 1; }
+  .toast.err { background: var(--err); }
+
+  .bulk-bar { position: fixed; left: 50%; transform: translateX(-50%); bottom: 16px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 12px 16px; display: none; gap: 10px; align-items: center; flex-wrap: wrap; box-shadow: 0 8px 24px rgba(0,0,0,0.25); z-index: 60; max-width: 95vw; }
+  .bulk-bar.show { display: flex; }
+  .bulk-bar .cnt { font-size: 13px; font-weight: 500; padding-right: 6px; border-right: 1px solid var(--border); }
+  .bulk-bar input, .bulk-bar select { width: auto; min-width: 130px; }
+  .bulk-bar label { font-size: 11px; color: var(--text-muted); }
+
+  .ports { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .port-pill { padding: 3px 9px; font-size: 11px; border-radius: 11px; background: var(--bg); border: 1px solid var(--border); color: var(--text-muted); font-family: var(--mono); }
+  .port-pill strong { color: var(--text); font-weight: 500; }
+
+  /* checkbox cell */
+  .cb-cell { width: 28px; padding-left: 6px !important; padding-right: 0 !important; }
+  .cb-cell input { width: 16px; height: 16px; cursor: pointer; }
+
+  .spark-24h { display: block; margin-top: 4px; height: 12px; opacity: 0.85; }
+  .ping-result { display: inline-block; padding: 4px 10px; margin-left: 8px; font-size: 12px; border-radius: 8px; }
+  .snmp-info { margin-top: 8px; padding: 8px 10px; background: var(--bg); border-radius: 8px; border: 1px solid var(--border); font-size: 12px; font-family: var(--mono); white-space: pre-wrap; }
+
+  .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 50; padding: 16px; }
+  .modal-backdrop.show { display: flex; }
+  .modal { background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; padding: 20px; max-width: 600px; width: 100%; max-height: 90vh; overflow-y: auto; }
+  .modal h2 { margin: 0 0 14px; font-size: 18px; font-weight: 500; }
+  .modal .field { margin-bottom: 10px; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+
+  @media (max-width: 1024px) {
+    .container { padding: 12px; }
+  }
+  @media (max-width: 768px) {
+    /* iPad portrait */
+    .container { padding: 10px; }
+    .header { flex-direction: column; align-items: flex-start; }
+    .header h1 { font-size: 18px; }
+    .detail-panel { margin: 4px 4px 12px 4px; padding: 12px 13px; }
+    .detail-grid { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 6px 12px; }
+    .actions-row { gap: 6px; }
+    .actions-row .btn { padding: 7px 11px; font-size: 12px; }
+    /* hide MAC+vendor column */
+    table tr > *:nth-child(5) { display: none; }
+    .ipmap-grid { gap: 1px; }
+    .ipmap-cell { min-height: 22px; font-size: 9px; }
+  }
+  @media (max-width: 600px) {
+    /* iPhone portrait */
+    .container { padding: 8px; }
+    .card { padding: 11px 13px; }
+    .actions-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .actions-row .btn { padding: 8px 6px; font-size: 11.5px; justify-content: center; text-align: center; }
+    .actions-row .view-toggle { grid-column: 1 / -1; justify-content: center; }
+    table { font-size: 11.5px; }
+    thead th { padding: 6px 4px; font-size: 10px; }
+    tbody td { padding: 6px 4px; }
+    /* hide IP, MAC, Vendor, Type columns on narrow (keep name + room + status only) */
+    table tr > *:nth-child(4),    /* IP */
+    table tr > *:nth-child(5),    /* MAC */
+    table tr > *:nth-child(6) {   /* Type */
+      display: none;
+    }
+    td.name-cell { max-width: 130px; }
+    .dev-icon { width: 26px; height: 26px; font-size: 13px; }
+    .stats-row { gap: 10px; }
+    .stat strong { font-size: 13px; }
+    .chips { gap: 4px; }
+    .chip { padding: 4px 9px; font-size: 11px; }
+    .modal { padding: 14px; max-width: 100%; max-height: 92vh; }
+    .modal-backdrop { padding: 8px; }
+    .detail-grid { grid-template-columns: 1fr; }
+    .creds-table { font-size: 11px; }
+    .creds-table td { padding: 3px 4px; }
+    .bulk-bar { left: 8px; right: 8px; transform: none; padding: 10px; flex-direction: column; align-items: stretch; }
+    .bulk-bar .cnt { border-right: none; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+    .bulk-bar input, .bulk-bar select { width: 100%; }
+    /* IP map: уменьшаем колонки чтобы поместились */
+    .ipmap-grid { grid-template-columns: repeat(16, 1fr); max-width: 100%; }
+    .ipmap-cell { min-height: 18px; font-size: 8px; }
+  }
+  @media (max-width: 420px) {
+    /* small phone — IP map crowded; switch to 8×32 grid for tap-friendliness */
+    .ipmap-grid { grid-template-columns: repeat(8, 1fr); }
+    .ipmap-cell { min-height: 26px; font-size: 10px; }
+  }
+  @media (hover: none) and (pointer: coarse) {
+    .ipmap-cell { min-height: 28px; }
+    .chip, .btn, .icon-btn { min-height: 32px; }
+    .creds-table input { min-height: 30px; }
+    /* photo-thumb taps */
+    .photo-thumb { min-width: 60px; min-height: 60px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+
+  <div class="header">
+    <div>
+      <h1>Карта сети</h1>
+      <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <button class="btn-action c-blue" onclick="location.href='/'">
+          <svg viewBox="0 0 24 24"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+          Мониторинг
+        </button>
+        <button class="btn-action c-mute" onclick="showNetHelp()" title="Что умеет карта сети">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          Возможности
+        </button>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <span class="sub" id="subnet-info">—</span>
+      <button class="btn" onclick="toggleTheme()" id="btn-theme" title="Светлая / тёмная тема" style="padding:6px 10px;font-size:14px;">◐</button>
+      <button class="btn" onclick="doLogout()" id="btn-logout" title="Выйти" style="padding:6px 10px;display:inline-flex;align-items:center;gap:5px"><span id="logout-user" style="font-size:11px;color:var(--text-dim)">—</span><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></button>
+    </div>
+  </div>
+
+  <!-- Network page help modal -->
+  <div class="modal-backdrop" id="net-help-modal" onclick="if(event.target===this)hideNetHelp()">
+    <div class="modal" style="max-width: 720px">
+      <h2 style="margin:0 0 6px;font-size:19px;font-weight:500">Карта сети — что умеет</h2>
+      <p style="margin:0 0 16px;font-size:12.5px;color:var(--text-muted)">Инвентарь всех устройств в локальной сети с автодискавери, маркировкой, доступами, мониторингом доступности.</p>
+
+      <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">🔍 Дискавери и опрос</h3>
+      <ul style="font-size:12.5px;line-height:1.6;padding-left:20px;margin:0">
+        <li><b>🔍 Сканировать сеть</b> — <code>nmap -sn -PR</code> по всей подсети /24. Находит IP + MAC + вендор. Запускается в фоне, занимает ~30 сек на ~100 устройств.</li>
+        <li><b>Автоскан</b> — фон, по умолчанию раз в 4 ч (настраивается в ⚙️ Настройки). Новые устройства автоматом попадают в очередь FP-опроса.</li>
+        <li><b>Presence check</b> — лёгкий ARP-скан раз в 60 сек обновляет статус онлайн/офлайн у всех уже известных устройств и логирует переходы.</li>
+        <li><b>🔬 Опросить службы у всех / по одному</b> — <code>nmap -sV</code> по 13 типичным портам (22/80/443/554/1883/8080...). Заполняет открытые порты + автоматически подставляет URL веб-интерфейса.</li>
+        <li><b>🔗 Sync MikroTik</b> — подтягивает имена устройств из DHCP-comments в MikroTik (RouterOS 7 REST API). Match по MAC. Override always: всегда перезаписывает имя. Также проставляет флаг <b>static/dynamic</b> в одноимённой колонке. Кириллица в comment'ах декодируется из CP1251 автоматически.</li>
+        <li><b>mDNS-обогащение</b> — при каждом скане <code>avahi-browse</code> подтягивает «человеческие» имена для Sonos / Apple / HomeKit / принтеров.</li>
+        <li><b>🏷 Переклассифицировать</b> — пройти по «Без типа» и назначить тип по vendor (Hikvision→camera, MikroTik→network, и т.п.).</li>
+      </ul>
+
+      <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">📋 Таблица устройств</h3>
+      <ul style="font-size:12.5px;line-height:1.6;padding-left:20px;margin:0">
+        <li><b>Сортировка</b> — клик по заголовку колонки. IP сортируется натурально (.5 до .50). Повторный клик — обратный порядок.</li>
+        <li><b>Фильтры</b> — чипы наверху: Все / Онлайн / Офлайн + динамические per-type.</li>
+        <li><b>Поиск</b> — по имени / hostname / IP / MAC / описанию / комнате / заметкам.</li>
+        <li><b>Колонка DHCP</b> — <span class="pill" style="background:rgba(29,158,117,0.15);color:var(--ok);border-color:transparent;font-size:10px">static</span> = закреплён за MAC в MikroTik (DHCP reservation), <span class="pill" style="background:rgba(154,161,173,0.15);color:var(--text-muted);border-color:transparent;font-size:10px">dynamic</span> = получает любой свободный IP, «—» = не было ещё синка с MikroTik. Заполняется по кнопке 🔗 Sync MikroTik.</li>
+        <li><b>24h полоска</b> в столбце «Статус» — мини-визуализация доступности за сутки (зелёный=онлайн, жёлтый=частично, красный=офлайн).</li>
+      </ul>
+
+      <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">📝 Карточка устройства (клик на строку)</h3>
+      <ul style="font-size:12.5px;line-height:1.6;padding-left:20px;margin:0">
+        <li><b>Поля</b>: имя, помещение, тип, URL веб-интерфейса, описание, заметки.</li>
+        <li><b>☑ Показывать на дашборде</b> — устройство появится плиткой на главной странице с 24h-полоской.</li>
+        <li><b>Теги</b> — свободные пилюли. Enter / запятая = добавить. Клик на × = удалить.</li>
+        <li><b>Фото</b> — загрузить картинку устройства до 2 МБ.</li>
+        <li><b>Доступы</b> — несколько пар логин/пароль на устройство (например admin + viewer + RTSP). Кнопки 👁 показать, 📋 копировать.</li>
+        <li><b>История присутствия</b> — uptime % за 30 дней + лента событий онлайн/офлайн.</li>
+        <li><b>История изменений</b> — что и когда правили в карточке (audit log, retention 90 дней). Записи синка MikroTik помечаются как <code>sync_mikrotik</code>.</li>
+        <li><b>Метаданные</b> — IP / MAC / vendor / когда впервые увидели / когда последний раз был онлайн.</li>
+        <li><b>Открытые порты</b> — результат опроса служб (nmap -sV).</li>
+      </ul>
+
+      <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">🔘 Действия в карточке</h3>
+      <ul style="font-size:12.5px;line-height:1.6;padding-left:20px;margin:0">
+        <li><b>💾 Сохранить</b> — сохранить правки полей (теги, фото, доступы сохраняются автоматом).</li>
+        <li><b>↗ Открыть веб-UI</b> — если URL задан или подобран опросом.</li>
+        <li><b>🖥 Терминал</b> — открыть SSH-сессию к устройству в браузере (через WebSSH на :8022). Пароль вводится в форме webssh.</li>
+        <li><b>📋 SSH cmd</b> — скопировать команду <code>ssh pi@&lt;ip&gt;</code> в буфер (для родного терминала).</li>
+        <li><b>📡 Ping сейчас</b> — мгновенный ICMP-пинг + RTT.</li>
+        <li><b>🔬 Опросить службы</b> — nmap -sV для одного устройства.</li>
+        <li><b>📊 SNMP опрос</b> — для устройств типа network (нужно community). Тащит sysName / sysDescr / sysUpTime / число интерфейсов.</li>
+        <li><b>🗑 Удалить</b> — убрать из карты (физически устройство не трогается).</li>
+      </ul>
+
+      <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">☑ Bulk операции</h3>
+      <p style="font-size:12.5px;line-height:1.5;margin:0">Чекбоксы слева. При выборе всплывает нижняя панель: массово назначить <b>помещение / тип / показ на дашборде</b>. Удобно для «выбрать все камеры → присвоить помещение Двор» одним кликом.</p>
+
+      <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">🗺 Карта IP (переключатель справа)</h3>
+      <p style="font-size:12.5px;line-height:1.5;margin:0">Визуальная сетка 16×16 = 256 IP подсети.</p>
+      <ul style="font-size:12.5px;line-height:1.6;padding-left:20px;margin:4px 0 0">
+        <li><b>Фон ячейки = тип адреса</b>: <span style="color:var(--ok)">зелёный</span> = static (DHCP-резервация по MAC в MikroTik), <span style="color:#BA7517">жёлтый</span> = dynamic (получил любой свободный IP), <span style="color:#A66C35">коричневый</span> = шлюз (<code>.1</code>), <span style="color:#3FB0CC">голубой</span> = этот контроллер, белый = свободен / скрыт фильтром.</li>
+        <li><b>Точка снизу-справа = статус</b>: <span style="color:#1D9E75">зелёная</span> онлайн, <span style="color:#E24B4A">красная</span> офлайн.</li>
+        <li><b>4 чекбокса-фильтра</b> над картой — все комбинации type×status. По умолчанию выключен только dynamic·offline (старые DHCP-арендаторы которые давно отключились).</li>
+        <li>Шлюз <code>.1</code> и этот контроллер показываются всегда независимо от фильтров.</li>
+        <li>Клик по занятой ячейке — раскрытие карточки устройства в таблице.</li>
+      </ul>
+      <p style="font-size:12.5px;line-height:1.5;margin:6px 0 0;color:var(--text-muted)">
+        Та же карта продублирована в самом низу дашборда (<a href="/" style="color:var(--info)">/</a>) — там клик по ячейке открывает эту страницу.
+      </p>
+
+      <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">⚙️ Настройки</h3>
+      <ul style="font-size:12.5px;line-height:1.6;padding-left:20px;margin:0">
+        <li><b>Период автоскана</b> — выкл / 30 мин / 1 / 2 / 4 / 6 / 12 / 24 ч.</li>
+        <li><b>Типы устройств</b> — переименовать встроенные, добавить свои (термостат / выключатель / etc).</li>
+      </ul>
+
+      <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">🎛 Управление в шапке</h3>
+      <ul style="font-size:12.5px;line-height:1.6;padding-left:20px;margin:0">
+        <li><b>← мониторинг контроллера</b> — вернуться на главную страницу дашборда.</li>
+        <li><b>◐</b> — переключить тему (auto / light / dark), синхронизировано с дашбордом.</li>
+      </ul>
+
+      <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">💾 Экспорт и бекапы</h3>
+      <ul style="font-size:12.5px;line-height:1.6;padding-left:20px;margin:0">
+        <li><b>⬇ Экспорт CSV</b> — выгрузка всей таблицы с именами / IP / MAC / типами / комнатами / основными логинами-паролями.</li>
+        <li>Автоматический бекап <code>inventory.db</code> в <code>/var/lib/smartcomm-dashboard/backups/</code>, retention 30 дней. Срабатывает при каждом рестарте дашборда (после деплоя).</li>
+      </ul>
+
+      <div style="display:flex;justify-content:flex-end;margin-top:18px">
+        <button class="btn" onclick="hideNetHelp()">Закрыть</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="stats-row" id="stats">
+      <span class="stat"><strong id="stat-total">—</strong> устройств</span>
+      <span class="stat ok"><strong id="stat-online">—</strong> онлайн</span>
+      <span class="stat err"><strong id="stat-offline">—</strong> офлайн</span>
+      <span class="stat">подсеть <strong id="stat-subnet">—</strong></span>
+      <span class="stat">последнее сканирование <strong id="stat-last-scan">—</strong></span>
+      <span class="stat">следующее авто <strong id="stat-next-scan">—</strong></span>
+      <span class="stat">presence <strong id="stat-presence">—</strong></span>
+    </div>
+    <div class="actions-row">
+      <button class="btn primary" id="btn-scan">🔍 Сканировать сеть</button>
+      <button class="btn" id="btn-fp-all" onclick="fingerprintAll()">🔬 Опросить службы у всех</button>
+      <button class="btn" id="btn-mt-sync" onclick="syncMikrotik()" title="Подтянуть имена из DHCP-комментариев MikroTik">🔗 Sync MikroTik</button>
+      <button class="btn" onclick="showAddModal()">+ Добавить вручную</button>
+      <button class="btn" onclick="reclassify()">🏷 Переклассифицировать</button>
+      <button class="btn" onclick="showSettingsModal()">⚙️ Настройки</button>
+      <button class="btn" onclick="location.href='/api/network/export.csv'">⬇ Экспорт CSV</button>
+      <span class="view-toggle">
+        <button class="active" id="vt-table" onclick="setView('table')">📋 Таблица</button>
+        <button id="vt-map" onclick="setView('map')">🗺 Карта IP</button>
+      </span>
+    </div>
+    <div id="fp-progress" style="display:none; margin-top:10px; padding:8px 12px; background:var(--bg-inner); border:1px solid var(--info); border-radius:8px; font-size:12px; color:var(--info);"></div>
+  </div>
+
+  <div class="card">
+    <div class="chips" id="filter-chips">
+      <span class="chip active" data-filter="all">Все <span id="cnt-all">0</span></span>
+      <span class="chip" data-filter="online">Онлайн <span id="cnt-online">0</span></span>
+      <span class="chip" data-filter="offline">Офлайн <span id="cnt-offline">0</span></span>
+      <span id="type-chips"></span>
+    </div>
+    <input type="text" id="search" placeholder="поиск по имени / IP / MAC / описанию / комнате…" />
+  </div>
+
+  <!-- IP map view (toggle on top right) -->
+  <div class="card" id="ipmap-card" style="display: none;">
+    <p class="panel-title">Карта IP <span class="meta">подсеть <span id="ipmap-subnet">—</span></span></p>
+    <div class="ipmap-filters">
+      <label><input type="checkbox" id="filt-stat-on"  checked onchange="renderIpMap()"><span class="sw sw-static"></span><span class="dot-sw dot-on"></span>static · онлайн</label>
+      <label><input type="checkbox" id="filt-stat-off" checked onchange="renderIpMap()"><span class="sw sw-static"></span><span class="dot-sw dot-off"></span>static · офлайн</label>
+      <label><input type="checkbox" id="filt-dyn-on"   checked onchange="renderIpMap()"><span class="sw sw-dynamic"></span><span class="dot-sw dot-on"></span>dynamic · онлайн</label>
+      <label><input type="checkbox" id="filt-dyn-off"         onchange="renderIpMap()"><span class="sw sw-dynamic"></span><span class="dot-sw dot-off"></span>dynamic · офлайн</label>
+      <span style="color:var(--text-dim);font-size:11px;align-self:center">шлюз .1 и этот контроллер показываются всегда</span>
+    </div>
+    <div class="ipmap-wrap">
+      <div class="ipmap-grid" id="ipmap-grid"></div>
+      <div class="ipmap-legend">
+        <span><span style="width:10px;height:10px;border-radius:2px;background:rgba(29,158,117,0.6);display:inline-block"></span>фон = static</span>
+        <span><span style="width:10px;height:10px;border-radius:2px;background:rgba(239,159,39,0.55);display:inline-block"></span>фон = dynamic</span>
+        <span><span style="width:10px;height:10px;border-radius:2px;background:rgba(166,108,53,0.8);display:inline-block"></span>фон = шлюз (.1)</span>
+        <span><span style="width:10px;height:10px;border-radius:2px;background:#5BC5E0;display:inline-block"></span>этот контроллер</span>
+        <span><span style="width:10px;height:10px;border-radius:2px;background:var(--bg-inner);border:1px solid var(--border);display:inline-block"></span>свободен / скрыт</span>
+        <span><span style="width:6px;height:6px;border-radius:50%;background:#1D9E75;display:inline-block"></span>точка = онлайн</span>
+        <span><span style="width:6px;height:6px;border-radius:50%;background:#E24B4A;display:inline-block"></span>точка = офлайн</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" id="table-card" style="padding: 0; overflow: hidden;">
+    <div style="overflow-x: auto;">
+      <table>
+        <thead>
+          <tr>
+            <th class="cb-cell"><input type="checkbox" id="cb-all" onclick="toggleAllVisible(this.checked)"></th>
+            <th style="width:50px"></th>
+            <th class="sortable" data-sort="name">Имя / hostname<span class="arr"></span></th>
+            <th class="sortable" data-sort="ip">IP<span class="arr"></span></th>
+            <th class="sortable" data-sort="dhcp" title="DHCP: static (закреплён в MikroTik) или dynamic">DHCP<span class="arr"></span></th>
+            <th class="sortable" data-sort="vendor">MAC · вендор<span class="arr"></span></th>
+            <th class="sortable" data-sort="type">Тип<span class="arr"></span></th>
+            <th class="sortable" data-sort="room">Помещение<span class="arr"></span></th>
+            <th class="sortable" data-sort="status">Статус<span class="arr"></span></th>
+          </tr>
+        </thead>
+        <tbody id="dev-tbody">
+          <tr><td colspan="9" class="empty"><h3>Загрузка…</h3></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<!-- Settings modal -->
+<div class="modal-backdrop" id="settings-modal" onclick="if(event.target===this)hideSettingsModal()">
+  <div class="modal" style="max-width: 700px">
+    <h2>Настройки</h2>
+
+    <h3 style="font-size: 14px; font-weight: 500; margin: 12px 0 8px;">Автоматическое сканирование</h3>
+    <div class="field">
+      <label class="field-label">Интервал</label>
+      <select id="set-interval">
+        <option value="0">Выключено</option>
+        <option value="0.5">Каждые 30 минут</option>
+        <option value="1">Каждый час</option>
+        <option value="2">Каждые 2 часа</option>
+        <option value="4">Каждые 4 часа</option>
+        <option value="6">Каждые 6 часов</option>
+        <option value="12">Каждые 12 часов</option>
+        <option value="24">Раз в сутки</option>
+      </select>
+    </div>
+    <div style="text-align: right">
+      <button class="btn primary" onclick="saveSettings()">Сохранить</button>
+    </div>
+
+    <h3 style="font-size: 14px; font-weight: 500; margin: 20px 0 8px;">MikroTik (REST API)</h3>
+    <p style="font-size: 12px; color: var(--text-muted); margin: 0 0 10px;">Нужно для кнопки <b>🔗 Sync MikroTik</b> и плиток MikroTik на дашборде. Пароль хранится в SQLite, доступ только из локальной сети.</p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+      <div class="field"><label class="field-label">IP</label><input type="text" id="mt-set-ip" placeholder="детектится автоматически"></div>
+      <div class="field"><label class="field-label">Логин</label><input type="text" id="mt-set-user" placeholder="admin"></div>
+    </div>
+    <div class="field"><label class="field-label">Пароль</label><input type="password" id="mt-set-pw" placeholder="(пусто = не менять)"></div>
+    <div id="mt-set-result" style="font-size:12px;min-height:18px;margin-top:6px"></div>
+    <div style="text-align: right; margin-top: 8px">
+      <button class="btn primary" onclick="saveMikrotikSettings()">Сохранить и проверить</button>
+    </div>
+
+    <h3 style="font-size: 14px; font-weight: 500; margin: 20px 0 8px;">Типы устройств</h3>
+    <p style="font-size: 12px; color: var(--text-muted); margin: 0 0 10px;">Встроенные типы переименовываются, удалить нельзя. Свои типы можно добавить и удалить (если ни одно устройство не использует).</p>
+    <div id="types-list" style="font-size: 13px; margin-bottom: 12px"></div>
+    <div style="display: flex; gap: 6px; align-items: flex-end;">
+      <div class="field" style="flex: 0 0 130px"><label class="field-label">Ключ (a-z, _)</label><input type="text" id="new-type-key" placeholder="thermostat"></div>
+      <div class="field" style="flex: 1"><label class="field-label">Название</label><input type="text" id="new-type-label" placeholder="Термостат"></div>
+      <button class="btn primary" onclick="addType()" style="height: 36px">+</button>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn" onclick="hideSettingsModal()">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<!-- Bulk-edit floating toolbar -->
+<div class="bulk-bar" id="bulk-bar">
+  <span class="cnt"><span id="bulk-cnt">0</span> выбрано</span>
+  <div>
+    <label>Помещение</label>
+    <input type="text" id="bulk-room" placeholder="например, Серверная">
+  </div>
+  <div>
+    <label>Тип</label>
+    <select id="bulk-type">
+      <option value="">— не менять —</option>
+      <option value="controller">Контроллер</option>
+      <option value="camera">Камера</option>
+      <option value="network">Сетевое</option>
+      <option value="panel">Панель</option>
+      <option value="iot">IoT</option>
+      <option value="printer">Принтер</option>
+      <option value="sensor">Сенсор</option>
+      <option value="other">Без типа</option>
+    </select>
+  </div>
+  <div>
+    <label>Дашборд</label>
+    <select id="bulk-monitor">
+      <option value="">— не менять —</option>
+      <option value="1">Показывать</option>
+      <option value="0">Не показывать</option>
+    </select>
+  </div>
+  <button class="btn primary" onclick="applyBulk()">Применить</button>
+  <button class="btn" onclick="clearSelection()">Снять</button>
+</div>
+
+<!-- Add device modal -->
+<div class="modal-backdrop" id="add-modal" onclick="if(event.target===this)hideAddModal()">
+  <div class="modal">
+    <h2>Новое устройство</h2>
+    <div class="field"><label class="field-label">Имя</label><input type="text" id="add-name" placeholder="например, hik-front-door"></div>
+    <div class="field"><label class="field-label">IP</label><input type="text" id="add-ip" placeholder="например, 192.168.X.51"></div>
+    <div class="field"><label class="field-label">MAC (опционально)</label><input type="text" id="add-mac" placeholder="bc:ad:28:..."></div>
+    <div class="field"><label class="field-label">Тип</label>
+      <select id="add-type">
+        <option value="other">Другое</option>
+        <option value="controller">Контроллер</option>
+        <option value="camera">Камера</option>
+        <option value="network">Сетевое (роутер/AP/коммутатор)</option>
+        <option value="panel">Панель / iPad</option>
+        <option value="iot">IoT / умный дом</option>
+        <option value="printer">Принтер</option>
+        <option value="sensor">Сенсор</option>
+      </select>
+    </div>
+    <div class="field"><label class="field-label">Помещение</label><input type="text" id="add-room" placeholder="Серверная"></div>
+    <div class="field"><label class="field-label">Описание</label><textarea id="add-desc"></textarea></div>
+    <div class="field"><label class="field-label">Логин</label><input type="text" id="add-login"></div>
+    <div class="field"><label class="field-label">Пароль</label><input type="text" id="add-password"></div>
+    <div class="field"><label class="field-label">URL веб-интерфейса (если есть)</label><input type="text" id="add-url" placeholder="http://устройство/"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="hideAddModal()">Отмена</button>
+      <button class="btn primary" onclick="submitAdd()">Создать</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const STALE_MIN = 5 * 60;  // seconds — after which device considered offline
+const TYPE_ICONS = {
+  controller: 'ctrl', camera: 'cam', network: 'net',
+  panel: 'tab', iot: 'iot', printer: 'pr', sensor: 'sn', other: '?'
+};
+// dynamic — loaded from /api/network/types
+let TYPE_LABEL = {
+  controller: 'контроллер', camera: 'камера', network: 'сетевое',
+  panel: 'панель', iot: 'IoT', printer: 'принтер', sensor: 'сенсор', other: 'другое'
+};
+let TYPES_FULL = [];   // full list from API
+let fpPollTimer = null;
+let devEventsCache = new Map();   // id -> {ok, ts, data}
+
+let allDevices = [];
+let currentFilter = 'all';
+let currentSearch = '';
+let expandedId = null;
+let scanPollTimer = null;
+let selectedIds = new Set();
+let sortField = 'ip';
+let sortDir = 'asc';
+
+function ipKey(ip) {
+  if (!ip) return [999, 999, 999, 999];
+  return ip.split('.').map(n => parseInt(n, 10) || 0);
+}
+function cmpIp(a, b) {
+  const ka = ipKey(a), kb = ipKey(b);
+  for (let i = 0; i < 4; i++) {
+    if (ka[i] !== kb[i]) return ka[i] - kb[i];
+  }
+  return 0;
+}
+function sortValue(d, field) {
+  switch (field) {
+    case 'name':   return (d.name || d.hostname || '').toLowerCase();
+    case 'ip':     return d.ip || '';
+    case 'vendor': return (d.vendor || '').toLowerCase();
+    case 'type':   return (TYPE_LABEL[d.device_type || 'other'] || '').toLowerCase();
+    case 'room':   return (d.room || '').toLowerCase();
+    case 'status': return isOnline(d) ? 0 : 1;
+    case 'dhcp':   return d.dhcp_static === 1 || d.dhcp_static === true ? 0 : 1;
+    default:       return '';
+  }
+}
+function sortDevices(arr) {
+  const dir = sortDir === 'asc' ? 1 : -1;
+  return arr.slice().sort((a, b) => {
+    if (sortField === 'ip') return cmpIp(a.ip, b.ip) * dir;
+    const va = sortValue(a, sortField), vb = sortValue(b, sortField);
+    if (va < vb) return -1 * dir;
+    if (va > vb) return  1 * dir;
+    return cmpIp(a.ip, b.ip);   // stable tiebreaker by IP
+  });
+}
+function setSort(field) {
+  if (sortField === field) {
+    sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    sortField = field;
+    sortDir = 'asc';
+  }
+  updateSortIndicators();
+  render();
+}
+function updateSortIndicators() {
+  document.querySelectorAll('thead th.sortable').forEach(th => {
+    const active = th.dataset.sort === sortField;
+    th.classList.toggle('sorted', active);
+    th.querySelector('.arr').textContent = active ? (sortDir === 'asc' ? '▲' : '▼') : '';
+  });
+}
+
+// ============ View toggle (table vs IP map) ============
+let currentView = 'table';
+function setView(v) {
+  currentView = v;
+  document.getElementById('vt-table').classList.toggle('active', v === 'table');
+  document.getElementById('vt-map').classList.toggle('active', v === 'map');
+  document.getElementById('table-card').style.display = v === 'table' ? '' : 'none';
+  document.getElementById('ipmap-card').style.display = v === 'map' ? '' : 'none';
+  if (v === 'map') renderIpMap();
+}
+
+function renderIpMap() {
+  const grid = document.getElementById('ipmap-grid');
+  const sub  = document.getElementById('ipmap-subnet');
+  const filters = {
+    statOn:  document.getElementById('filt-stat-on') ?.checked ?? true,
+    statOff: document.getElementById('filt-stat-off')?.checked ?? true,
+    dynOn:   document.getElementById('filt-dyn-on')  ?.checked ?? true,
+    dynOff:  document.getElementById('filt-dyn-off') ?.checked ?? false,
+  };
+  let prefix = null;
+  const byLast = new Map();
+  for (const d of allDevices) {
+    if (!d.ip) continue;
+    const m = d.ip.match(/^(\d+\.\d+\.\d+)\.(\d+)$/);
+    if (!m) continue;
+    prefix = m[1];
+    byLast.set(parseInt(m[2], 10), d);
+  }
+  if (!prefix) {
+    grid.innerHTML = '<div style="color:var(--text-dim);padding:20px">Нет данных</div>';
+    return;
+  }
+  sub.textContent = prefix + '.0/24';
+  const cells = [];
+  for (let i = 0; i < 256; i++) {
+    const d = byLast.get(i);
+    const isSelf = location.hostname.endsWith('.' + i);
+    let klass = 'ipmap-cell';
+    let title = prefix + '.' + i + ' · свободен';
+    let dotHtml = '';
+    let onclick = '';
+    let render = !!d;
+    if (d) {
+      const online = isOnline(d);
+      const isStatic  = d.dhcp_static === 1 || d.dhcp_static === true;
+      const isGateway = i === 1;
+      // Шлюз и self показываем всегда; остальное — по фильтрам
+      if (!isGateway && !isSelf) {
+        if (isStatic && online)  render = filters.statOn;
+        if (isStatic && !online) render = filters.statOff;
+        if (!isStatic && online) render = filters.dynOn;
+        if (!isStatic && !online)render = filters.dynOff;
+      }
+    }
+    if (render && d) {
+      const online = isOnline(d);
+      const isStatic  = d.dhcp_static === 1 || d.dhcp_static === true;
+      const isGateway = i === 1;
+      klass += isGateway ? ' t-gateway' : (isStatic ? ' t-static' : ' t-dynamic');
+      const name = d.name || d.hostname || d.vendor || '?';
+      const tags = [];
+      if (isGateway) tags.push('шлюз');
+      tags.push(isStatic ? 'static' : 'dynamic');
+      title = prefix + '.' + i + ' · ' + name + ' · ' + tags.join(', ') + ' · ' + (online ? 'онлайн' : 'офлайн');
+      dotHtml = '<span class="dot ' + (online ? 'on' : 'off') + '"></span>';
+      onclick = 'expandById(' + d.id + ')';
+    }
+    if (isSelf) klass += ' self';
+    cells.push(`<div class="${klass}" title="${escapeAttr(title)}" onclick="${onclick}">${i}${dotHtml}</div>`);
+  }
+  grid.innerHTML = cells.join('');
+}
+
+function expandById(id) {
+  setView('table');
+  expandedId = id;
+  render();
+  // scroll into view
+  setTimeout(() => {
+    const tr = document.querySelector(`tr.dev-row[data-id="${id}"]`);
+    if (tr) tr.scrollIntoView({behavior: 'smooth', block: 'center'});
+  }, 100);
+}
+
+function escapeHtml(s) {
+  return (s == null ? '' : String(s)).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+// Alias — некоторые места исторически использовали escapeAttr; делает то же самое.
+const escapeAttr = escapeHtml;
+function fmtAge(ts) {
+  if (!ts) return '—';
+  const age = Math.floor(Date.now()/1000 - ts);
+  if (age < 60) return age + ' сек';
+  if (age < 3600) return Math.floor(age/60) + ' мин';
+  if (age < 86400) return Math.floor(age/3600) + ' ч';
+  return Math.floor(age/86400) + ' д';
+}
+function isOnline(dev) {
+  // Prefer the authoritative is_online column (set by presence check);
+  // fall back to last_seen heuristic if is_online is missing.
+  if (dev.is_online === 1 || dev.is_online === true) return true;
+  if (dev.is_online === 0 || dev.is_online === false) return false;
+  return dev.last_seen && (Date.now()/1000 - dev.last_seen) < STALE_MIN;
+}
+
+function showToast(msg, isErr) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (isErr ? ' err' : '');
+  setTimeout(() => t.className = 'toast', 3500);
+}
+
+function matchesFilter(dev) {
+  if (currentFilter === 'all') return true;
+  if (currentFilter === 'online')  return isOnline(dev);
+  if (currentFilter === 'offline') return !isOnline(dev);
+  if (currentFilter.startsWith('type:')) {
+    const t = currentFilter.slice(5);
+    return (dev.device_type || 'other') === t;
+  }
+  return true;
+}
+function matchesSearch(dev) {
+  if (!currentSearch) return true;
+  const q = currentSearch.toLowerCase();
+  return [dev.name, dev.hostname, dev.ip, dev.mac, dev.vendor,
+          dev.room, dev.description, dev.device_type, dev.notes]
+    .some(v => v && String(v).toLowerCase().includes(q));
+}
+
+function render() {
+  const tbody = document.getElementById('dev-tbody');
+  // Если пользователь печатает / выбрал текст в раскрытой карточке —
+  // не перерисовываем, иначе innerHTML затирает ввод (логин/пароль/заметки).
+  // На следующем autorefresh (30 сек) попробуем снова.
+  if (expandedId !== null) {
+    const ae = document.activeElement;
+    const panel = document.querySelector('tr.detail-row');
+    if (panel && ae && panel.contains(ae) && ae !== document.body) {
+      return;
+    }
+  }
+  const visible = sortDevices(allDevices.filter(d => matchesFilter(d) && matchesSearch(d)));
+  if (visible.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="9" class="empty"><h3>Нет устройств</h3><div>Нажми «Сканировать сеть» или «Добавить вручную».</div></td></tr>';
+    updateBulkBar();
+    return;
+  }
+  const rows = [];
+  for (const d of visible) {
+    const online = isOnline(d);
+    const t = d.device_type || 'other';
+    const displayName = d.name || d.hostname || (d.ip ? 'без имени' : 'manual entry');
+    const checked = selectedIds.has(d.id) ? 'checked' : '';
+    rows.push(`
+      <tr class="dev-row ${expandedId === d.id ? 'expanded' : ''}" data-id="${d.id}">
+        <td class="cb-cell" data-noclick="1"><input type="checkbox" ${checked} onchange="toggleSelect(${d.id}, this.checked)"></td>
+        <td><span class="dev-icon">${TYPE_ICONS[t] || '?'}</span></td>
+        <td class="name-cell" title="${escapeHtml(displayName)}${d.hostname ? ' · ' + escapeHtml(d.hostname) : ''}"><p class="dev-name">${escapeHtml(displayName)}</p>${d.hostname ? '<p class="dev-host">' + escapeHtml(d.hostname) + '</p>' : ''}</td>
+        <td class="mono">${escapeHtml(d.ip || '—')}</td>
+        <td>${d.dhcp_static === 1 || d.dhcp_static === true
+              ? '<span class="pill" style="background:rgba(29,158,117,0.15);color:var(--ok);border-color:transparent">static</span>'
+              : d.dhcp_static === 0 || d.dhcp_static === false
+                ? '<span class="pill" style="background:rgba(154,161,173,0.15);color:var(--text-muted);border-color:transparent">dynamic</span>'
+                : '<span style="color:var(--text-dim)">—</span>'}</td>
+        <td class="mono">${d.mac ? escapeHtml(d.mac) + (d.vendor ? ' · ' + escapeHtml(d.vendor) : '') : '<span style="color:var(--text-dim)">—</span>'}</td>
+        <td><span class="pill ${t}">${TYPE_LABEL[t] || t}</span></td>
+        <td>${escapeHtml(d.room || '—')}</td>
+        <td>
+          ${online ? '<span class="pill ok">онлайн</span>' : '<span class="pill off">офлайн ' + fmtAge(d.last_seen) + '</span>'}
+          ${spark24h(d.timeline_24h)}
+        </td>
+      </tr>
+    `);
+    if (expandedId === d.id) {
+      rows.push(detailHtml(d));
+    }
+  }
+  tbody.innerHTML = rows.join('');
+  updateBulkBar();
+  // Если карточка раскрыта — подгружаем динамические блоки,
+  // иначе они навсегда останутся «загрузка…» после autorefresh.
+  if (expandedId !== null) {
+    fetchCredentials(expandedId);
+    fetchDeviceEvents(expandedId);
+    fetchAudit(expandedId);
+  }
+  // Если открыта карта IP — обновляем её тоже (точки онлайн/офлайн актуализируются)
+  if (currentView === 'map') renderIpMap();
+}
+
+function toggleSelect(id, checked) {
+  if (checked) selectedIds.add(id);
+  else selectedIds.delete(id);
+  updateBulkBar();
+}
+function toggleAllVisible(checked) {
+  const visible = allDevices.filter(d => matchesFilter(d) && matchesSearch(d));
+  for (const d of visible) {
+    if (checked) selectedIds.add(d.id);
+    else selectedIds.delete(d.id);
+  }
+  render();
+}
+function clearSelection() {
+  selectedIds.clear();
+  document.getElementById('cb-all').checked = false;
+  render();
+}
+function updateBulkBar() {
+  const bar = document.getElementById('bulk-bar');
+  const cnt = selectedIds.size;
+  document.getElementById('bulk-cnt').textContent = cnt;
+  bar.classList.toggle('show', cnt > 0);
+}
+async function applyBulk() {
+  const room = document.getElementById('bulk-room').value.trim();
+  const type = document.getElementById('bulk-type').value;
+  const mon  = document.getElementById('bulk-monitor').value;
+  const fields = {};
+  if (room) fields.room = room;
+  if (type) fields.device_type = type;
+  if (mon !== '') fields.monitor_on_dashboard = parseInt(mon, 10);
+  if (!Object.keys(fields).length) return showToast('заполни помещение / тип / дашборд', true);
+  try {
+    const r = await fetch('/api/network/devices/bulk', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ids: Array.from(selectedIds), fields}),
+    });
+    const j = await r.json();
+    if (j.ok) {
+      showToast('обновлено: ' + j.count);
+      document.getElementById('bulk-room').value = '';
+      document.getElementById('bulk-type').value = '';
+      document.getElementById('bulk-monitor').value = '';
+      clearSelection();
+      await loadDevices();
+    } else {
+      showToast('ошибка: ' + j.error, true);
+    }
+  } catch (e) {
+    showToast('ошибка: ' + e.message, true);
+  }
+}
+
+async function reclassify() {
+  if (!confirm('Переклассифицировать устройства типа «Без типа» по вендору MAC?')) return;
+  try {
+    const r = await fetch('/api/network/reclassify', {method: 'POST'});
+    const j = await r.json();
+    if (j.ok) {
+      showToast('обновлено: ' + j.updated + ' устройств');
+      await loadDevices();
+    }
+  } catch (e) {
+    showToast(e.message, true);
+  }
+}
+
+async function pingDevice(id) {
+  const btn = document.getElementById('ping-btn-' + id);
+  const resEl = document.getElementById('ping-result-' + id);
+  if (btn) { btn.disabled = true; btn.textContent = 'Ping…'; }
+  if (resEl) resEl.innerHTML = '';
+  try {
+    const r = await fetch('/api/network/devices/' + id + '/ping', {method: 'POST'});
+    const j = await r.json();
+    if (j.ok) {
+      if (j.alive) {
+        resEl.innerHTML = '<span class="ping-result" style="background:rgba(29,158,117,0.18);color:var(--ok)">✓ alive · ' + (j.rtt_ms != null ? j.rtt_ms.toFixed(1) + ' мс' : '?') + '</span>';
+        showToast('alive · ' + (j.rtt_ms != null ? j.rtt_ms.toFixed(1) + ' мс' : ''));
+        setTimeout(loadDevices, 500);   // refresh status pill
+      } else {
+        resEl.innerHTML = '<span class="ping-result" style="background:rgba(226,75,74,0.18);color:var(--err)">✗ нет ответа</span>';
+      }
+    } else {
+      showToast(j.error || 'ошибка', true);
+    }
+  } catch (e) {
+    showToast(e.message, true);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '📡 Ping сейчас'; }
+  }
+}
+
+async function snmpProbe(id) {
+  const dev = allDevices.find(x => x.id === id);
+  const defaultCommunity = (dev && dev.snmp_community) || 'public';
+  const community = prompt('SNMP community (v2c):', defaultCommunity);
+  if (!community) return;
+  const btn = document.getElementById('snmp-btn-' + id);
+  const infoEl = document.getElementById('snmp-info-' + id);
+  if (btn) { btn.disabled = true; btn.textContent = 'SNMP…'; }
+  try {
+    const r = await fetch('/api/network/devices/' + id + '/snmp/probe', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({community, save: true}),
+    });
+    const j = await r.json();
+    if (j.ok) {
+      const i = j.info;
+      const lines = [];
+      if (i.sysName)   lines.push('sysName:   ' + i.sysName);
+      if (i.sysDescr)  lines.push('sysDescr:  ' + i.sysDescr);
+      if (i.sysUpTime) lines.push('sysUpTime: ' + i.sysUpTime);
+      if (i.ifNumber)  lines.push('интерфейсов: ' + i.ifNumber);
+      infoEl.innerHTML = '<div class="snmp-info">' + escapeHtml(lines.join('\n')) + '</div>';
+      showToast('SNMP получен');
+      setTimeout(loadDevices, 1000);
+    } else {
+      infoEl.innerHTML = '<div class="snmp-info" style="color:var(--err)">' + escapeHtml(j.error) + '</div>';
+    }
+  } catch (e) {
+    showToast(e.message, true);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '📊 SNMP опрос'; }
+  }
+}
+
+async function fingerprintDevice(id) {
+  const btn = document.getElementById('fp-btn-' + id);
+  if (btn) { btn.disabled = true; btn.textContent = 'Опрос…'; }
+  try {
+    const r = await fetch('/api/network/devices/' + id + '/fingerprint', {method: 'POST'});
+    const j = await r.json();
+    if (j.ok) {
+      showToast('опрос завершён: ' + (j.ports.length) + ' открытых портов');
+      await loadDevices();
+    } else {
+      showToast('ошибка: ' + j.error, true);
+    }
+  } catch (e) {
+    showToast(e.message, true);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🔬 Опросить службы'; }
+  }
+}
+
+function detailHtml(d) {
+  const url = d.url || (d.ip ? 'http://' + d.ip + '/' : '');
+  const monOn = d.monitor_on_dashboard ? 'on' : '';
+  const monChecked = d.monitor_on_dashboard ? 'checked' : '';
+  return `
+    <tr class="detail-row"><td colspan="9">
+      <div class="detail-panel">
+        <div class="detail-grid">
+          <div class="field"><label class="field-label">Имя</label><input type="text" id="ef-name-${d.id}" value="${escapeHtml(d.name || '')}"></div>
+          <div class="field"><label class="field-label">Помещение</label><input type="text" id="ef-room-${d.id}" value="${escapeHtml(d.room || '')}"></div>
+          <div class="field"><label class="field-label">Тип</label>
+            <select id="ef-type-${d.id}">
+              ${TYPES_FULL.map(t => `<option value="${escapeHtml(t.key)}" ${d.device_type === t.key ? 'selected' : ''}>${escapeHtml(t.label)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="field"><label class="field-label">URL веб-интерфейса</label><input type="text" id="ef-url-${d.id}" value="${escapeHtml(url)}"></div>
+          <div class="field" style="grid-column: 1 / -1"><label class="field-label">Описание</label><textarea id="ef-desc-${d.id}">${escapeHtml(d.description || '')}</textarea></div>
+          <div class="field" style="grid-column: 1 / -1"><label class="field-label">Заметки</label><textarea id="ef-notes-${d.id}">${escapeHtml(d.notes || '')}</textarea></div>
+        </div>
+
+        <div class="section-title">Доступы (логины / пароли)</div>
+        <div id="creds-host-${d.id}" style="font-size:12px;color:var(--text-dim)">загрузка…</div>
+
+        <div class="section-title">Метаданные</div>
+        <div class="detail-grid">
+          <div class="field"><label class="field-label">IP</label><div class="field-static mono">${escapeHtml(d.ip || '—')}</div></div>
+          <div class="field"><label class="field-label">MAC · вендор</label><div class="field-static mono">${d.mac ? escapeHtml(d.mac) + (d.vendor ? ' · ' + escapeHtml(d.vendor) : '') : '—'}</div></div>
+          <div class="field"><label class="field-label">Первое появление</label><div class="field-static">${d.first_seen ? new Date(d.first_seen*1000).toLocaleString('ru-RU') : '—'}</div></div>
+          <div class="field"><label class="field-label">Последний онлайн</label><div class="field-static">${d.last_seen ? new Date(d.last_seen*1000).toLocaleString('ru-RU') + ' (' + fmtAge(d.last_seen) + ' назад)' : 'никогда'}</div></div>
+        </div>
+
+        <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start">
+          <label class="monitor-cb ${monOn}" onclick="event.stopPropagation()">
+            <input type="checkbox" id="ef-monitor-${d.id}" ${monChecked} onchange="this.parentNode.classList.toggle('on', this.checked)">
+            <span>Показывать на дашборде</span>
+          </label>
+          <div style="flex:1;min-width:280px">
+            <div class="field-label">Теги</div>
+            <div id="tags-host-${d.id}" style="border:1px solid var(--border);border-radius:7px;padding:4px 6px;min-height:34px;background:var(--bg)">
+              ${(d.tags || []).map(t => '<span class="tag-chip">' + escapeHtml(t) + '<span class="x" onclick="event.stopPropagation();removeTag(' + d.id + ',&quot;' + escapeAttr(t) + '&quot;)">×</span></span>').join('')}
+              <input type="text" class="tag-input" id="tag-input-${d.id}" placeholder="+ тег"
+                onkeydown="event.stopPropagation();if(event.key==='Enter'||event.key===','){event.preventDefault();addTag(${d.id},this.value);this.value='';}"
+                onclick="event.stopPropagation()">
+            </div>
+          </div>
+          <div style="flex:0 0 100%;margin-top:6px">
+            <div class="field-label">Фото (несколько, до 2 МБ каждое)</div>
+            <div id="photo-host-${d.id}" class="photo-gallery">
+              ${(d.photos || []).map(p =>
+                '<div class="photo-tile" data-pid="' + p.id + '">'
+                + '<img src="/api/network/photos/' + p.id + '?_=' + (p.uploaded_at || 0) + '" '
+                + 'onclick="event.stopPropagation();window.open(this.src,\'_blank\')" '
+                + 'title="загружено ' + new Date(p.uploaded_at*1000).toLocaleString('ru-RU') + '">'
+                + '<button class="photo-del" onclick="event.stopPropagation();deletePhoto(' + d.id + ',' + p.id + ')" title="удалить">×</button>'
+                + '</div>'
+              ).join('')}
+              <label class="photo-add" onclick="event.stopPropagation()" title="добавить фото">+
+                <input type="file" accept="image/*" multiple style="display:none" onchange="uploadPhotos(${d.id}, this.files)">
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="section-title">История изменений</div>
+        <div id="audit-host-${d.id}" class="audit-list" style="color:var(--text-dim)">загрузка…</div>
+        ${(d.open_ports && d.open_ports.length) ? `
+        <div style="margin-top: 12px">
+          <div class="field-label">Открытые порты</div>
+          <div class="ports">
+            ${d.open_ports.map(p => '<span class="port-pill"><strong>' + p.port + '</strong>' + (p.name ? ' ' + escapeHtml(p.name) : '') + (p.product ? ' · ' + escapeHtml(p.product) : '') + '</span>').join('')}
+          </div>
+        </div>` : ''}
+        <div style="margin-top: 14px">
+          <div class="field-label">История присутствия (последние 30 дней)</div>
+          <div id="history-${d.id}" style="margin-top:4px;font-size:12px;color:var(--text-dim)">загрузка…</div>
+        </div>
+        <div style="margin-top: 14px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+          <button class="btn primary" onclick="event.stopPropagation();saveDevice(${d.id})">💾 Сохранить</button>
+          ${url ? `<button class="btn" onclick="event.stopPropagation();window.open('${escapeHtml(url)}', '_blank')">↗ Открыть веб-UI</button>` : ''}
+          ${d.ip ? `<button class="btn" onclick="event.stopPropagation();openWebSSH('${escapeAttr(d.ip)}','pi')" title="Открыть SSH-терминал в браузере">🖥 Терминал</button>` : ''}
+          ${d.ip ? `<button class="btn" onclick="event.stopPropagation();copySSH('${escapeAttr(d.ip)}')" title="Скопировать команду ssh">📋 SSH cmd</button>` : ''}
+          <button class="btn" id="ping-btn-${d.id}" onclick="event.stopPropagation();pingDevice(${d.id})">📡 Ping сейчас</button>
+          <button class="btn" id="fp-btn-${d.id}" onclick="event.stopPropagation();fingerprintDevice(${d.id})">🔬 Опросить службы</button>
+          ${(d.device_type === 'network' || d.snmp_community) ? `<button class="btn" id="snmp-btn-${d.id}" onclick="event.stopPropagation();snmpProbe(${d.id})">📊 SNMP опрос</button>` : ''}
+          <button class="btn danger" onclick="event.stopPropagation();deleteDevice(${d.id})">🗑 Удалить</button>
+          <span id="ping-result-${d.id}"></span>
+        </div>
+        <div id="snmp-info-${d.id}"></div>
+      </div>
+    </td></tr>
+  `;
+}
+
+function toggleExpand(id) {
+  expandedId = expandedId === id ? null : id;
+  render();
+  if (expandedId === id) {
+    fetchDeviceEvents(id);
+    fetchCredentials(id);
+    fetchAudit(id);
+  }
+}
+
+// ============ Tags (per-device) ============
+async function addTag(deviceId, raw) {
+  const tag = (raw || '').trim();
+  if (!tag) return;
+  const dev = allDevices.find(x => x.id === deviceId);
+  const cur = (dev && dev.tags) || [];
+  if (cur.includes(tag)) return;
+  const newTags = [...cur, tag];
+  try {
+    const r = await fetch('/api/network/devices/' + deviceId, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({tags: newTags}),
+    });
+    if ((await r.json()).ok) {
+      if (dev) dev.tags = newTags;
+      render();
+    }
+  } catch (e) { showToast(e.message, true); }
+}
+
+async function removeTag(deviceId, tag) {
+  const dev = allDevices.find(x => x.id === deviceId);
+  const cur = (dev && dev.tags) || [];
+  const newTags = cur.filter(t => t !== tag);
+  try {
+    const r = await fetch('/api/network/devices/' + deviceId, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({tags: newTags}),
+    });
+    if ((await r.json()).ok) {
+      if (dev) dev.tags = newTags;
+      render();
+    }
+  } catch (e) { showToast(e.message, true); }
+}
+
+// ============ Photo upload (multiple) ============
+async function uploadPhotos(deviceId, files) {
+  if (!files || !files.length) return;
+  let okCount = 0, errCount = 0;
+  for (const f of files) {
+    if (f.size > 2 * 1024 * 1024) { errCount++; continue; }
+    const fd = new FormData();
+    fd.append('photo', f);
+    try {
+      const r = await fetch('/api/network/devices/' + deviceId + '/photos',
+                            {method: 'POST', body: fd});
+      const j = await r.json();
+      if (j.ok) okCount++; else errCount++;
+    } catch (e) { errCount++; }
+  }
+  if (okCount) showToast(`загружено ${okCount}` + (errCount ? `, ошибок ${errCount}` : ''));
+  else showToast(errCount ? `все ${errCount} с ошибкой (>2 МБ?)` : 'нечего загружать', true);
+  await loadDevices();   // подтянет свежий photos массив
+}
+
+async function deletePhoto(deviceId, photoId) {
+  if (!confirm('Удалить это фото?')) return;
+  try {
+    const r = await fetch('/api/network/photos/' + photoId, {method: 'DELETE'});
+    if ((await r.json()).ok) {
+      showToast('удалено');
+      await loadDevices();
+    }
+  } catch (e) { showToast(e.message, true); }
+}
+
+// ============ Audit log ============
+const ACTION_LABEL = {
+  update: 'правка', create: 'создание', delete: 'удаление',
+  bulk_update: 'массовая правка', bulk_tags: 'теги (масс)',
+  photo: 'фото', fingerprint: 'опрос служб',
+};
+async function fetchAudit(deviceId) {
+  try {
+    const r = await fetch('/api/network/devices/' + deviceId + '/audit?limit=50');
+    const j = await r.json();
+    const host = document.getElementById('audit-host-' + deviceId);
+    if (!host) return;
+    const items = j.audit || [];
+    if (items.length === 0) {
+      host.innerHTML = '<div style="padding:6px 0">Изменений нет.</div>';
+      return;
+    }
+    host.innerHTML = items.map(a => {
+      const when = new Date(a.ts * 1000).toLocaleString('ru-RU', {
+        day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'
+      });
+      const act = ACTION_LABEL[a.action] || a.action;
+      let det = '';
+      if (a.details && typeof a.details === 'object') {
+        det = Object.entries(a.details).map(([k, v]) =>
+          k + '=' + (typeof v === 'object' ? JSON.stringify(v) : v)
+        ).join(' · ');
+      }
+      return `<div class="audit-row">
+        <span class="when">${when}</span>
+        <span class="act">${act}</span>
+        <span class="det">${escapeHtml(det)}</span>
+      </div>`;
+    }).join('');
+  } catch (e) {}
+}
+
+// ============ SSH ============
+function openWebSSH(ip, user) {
+  user = user || 'pi';
+  const host = location.hostname || '127.0.0.1';
+  const url = 'http://' + host + ':8022/?hostname=' + encodeURIComponent(ip)
+            + '&port=22&username=' + encodeURIComponent(user);
+  window.open(url, 'webssh-' + ip, 'width=1000,height=700');
+}
+function copySSH(ip) {
+  const cmd = 'ssh pi@' + ip;
+  navigator.clipboard.writeText(cmd).then(
+    () => showToast('скопировано: ' + cmd),
+    () => showToast('не удалось скопировать', true)
+  );
+}
+
+function showNetHelp() { document.getElementById('net-help-modal').classList.add('show'); }
+function hideNetHelp() { document.getElementById('net-help-modal').classList.remove('show'); }
+
+async function fetchCredentials(id) {
+  try {
+    const r = await fetch('/api/network/devices/' + id + '/credentials');
+    const j = await r.json();
+    renderCredentials(id, j.credentials || []);
+  } catch (e) {}
+}
+
+function renderCredentials(id, creds) {
+  const host = document.getElementById('creds-host-' + id);
+  if (!host) return;
+  if (!creds.length) {
+    host.innerHTML = `<div style="color:var(--text-dim);font-size:12px;margin-bottom:6px">Доступов нет.</div>
+      <button class="btn" onclick="event.stopPropagation();addCredential(${id})">+ Добавить доступ</button>`;
+    return;
+  }
+  const rows = creds.map(c => `
+    <tr>
+      <td style="width:120px"><input type="text" value="${escapeHtml(c.label || '')}" id="cred-label-${c.id}" placeholder="например: admin"></td>
+      <td><input type="text" value="${escapeHtml(c.username || '')}" id="cred-user-${c.id}" placeholder="логин"></td>
+      <td><input type="password" value="${escapeHtml(c.password || '')}" id="cred-pwd-${c.id}" placeholder="пароль"></td>
+      <td style="width:100px"><input type="text" value="${escapeHtml(c.notes || '')}" id="cred-notes-${c.id}" placeholder="порт, путь и т.п."></td>
+      <td class="creds-row-actions">
+        <button class="icon-btn" onclick="event.stopPropagation();togglePwdVis('cred-pwd-${c.id}')" title="показать/скрыть">👁</button>
+        <button class="icon-btn" onclick="event.stopPropagation();copyVal('cred-pwd-${c.id}')" title="копировать">📋</button>
+        <button class="icon-btn" onclick="event.stopPropagation();saveCredential(${c.id})" title="сохранить">✓</button>
+        <button class="icon-btn" style="color:var(--err)" onclick="event.stopPropagation();deleteCredential(${id}, ${c.id})" title="удалить">🗑</button>
+      </td>
+    </tr>
+  `).join('');
+  host.innerHTML = `
+    <table class="creds-table">
+      <thead><tr><th style="text-align:left;font-weight:400;font-size:10.5px;color:var(--text-muted)">Метка</th><th style="text-align:left;font-weight:400;font-size:10.5px;color:var(--text-muted)">Логин</th><th style="text-align:left;font-weight:400;font-size:10.5px;color:var(--text-muted)">Пароль</th><th style="text-align:left;font-weight:400;font-size:10.5px;color:var(--text-muted)">Заметка</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div style="margin-top:8px"><button class="btn" onclick="event.stopPropagation();addCredential(${id})">+ Добавить доступ</button></div>
+  `;
+}
+
+function togglePwdVis(elId) {
+  const el = document.getElementById(elId);
+  el.type = el.type === 'password' ? 'text' : 'password';
+}
+function copyVal(elId) {
+  const v = document.getElementById(elId).value;
+  if (!v) return showToast('пусто', true);
+  navigator.clipboard.writeText(v).then(() => showToast('скопировано'));
+}
+
+async function addCredential(deviceId) {
+  try {
+    const r = await fetch('/api/network/devices/' + deviceId + '/credentials', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({label: '', username: '', password: ''}),
+    });
+    if ((await r.json()).ok) fetchCredentials(deviceId);
+  } catch (e) { showToast(e.message, true); }
+}
+
+async function saveCredential(cid) {
+  const data = {
+    label:    document.getElementById('cred-label-' + cid).value,
+    username: document.getElementById('cred-user-'  + cid).value,
+    password: document.getElementById('cred-pwd-'   + cid).value,
+    notes:    document.getElementById('cred-notes-' + cid).value,
+  };
+  try {
+    const r = await fetch('/api/network/credentials/' + cid, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data),
+    });
+    if ((await r.json()).ok) showToast('сохранено');
+  } catch (e) { showToast(e.message, true); }
+}
+
+async function deleteCredential(deviceId, cid) {
+  if (!confirm('Удалить этот доступ?')) return;
+  try {
+    const r = await fetch('/api/network/credentials/' + cid, {method: 'DELETE'});
+    if ((await r.json()).ok) fetchCredentials(deviceId);
+  } catch (e) { showToast(e.message, true); }
+}
+
+async function fetchDeviceEvents(id) {
+  const cached = devEventsCache.get(id);
+  if (cached && (Date.now() - cached.ts < 30000)) {
+    renderDeviceHistory(id, cached.data);
+    return;
+  }
+  try {
+    const r = await fetch('/api/network/devices/' + id + '/events?days=30');
+    const j = await r.json();
+    if (j.ok) {
+      devEventsCache.set(id, {ts: Date.now(), data: j});
+      renderDeviceHistory(id, j);
+    }
+  } catch (e) {}
+}
+
+function renderDeviceHistory(id, j) {
+  const host = document.getElementById('history-' + id);
+  if (!host) return;
+  const upStr = j.uptime_pct != null ? j.uptime_pct.toFixed(2) + ' %' : '—';
+  const upColor = j.uptime_pct == null ? 'var(--text-dim)'
+                 : j.uptime_pct > 99   ? 'var(--ok)'
+                 : j.uptime_pct > 90   ? 'var(--warn)'
+                 :                       'var(--err)';
+  const summary = `
+    <div style="font-size:12.5px;color:var(--text);">
+      Uptime за ${j.days} дней: <strong style="color:${upColor}">${upStr}</strong>
+      &nbsp;·&nbsp; уходов в офлайн: <strong>${j.offline_events}</strong>
+      &nbsp;·&nbsp; всего событий: ${j.total_events}
+    </div>
+  `;
+  let list;
+  if (!j.events || j.events.length === 0) {
+    list = '<div style="color:var(--text-dim);font-size:12px;margin-top:8px">Событий нет (устройство не меняло статус с момента наблюдения).</div>';
+  } else {
+    list = '<div style="margin-top:10px;max-height:200px;overflow-y:auto;font-family:var(--mono);font-size:11px;">' +
+      j.events.map(e => {
+        const dt = new Date(e.ts*1000);
+        const t  = dt.toLocaleString('ru-RU', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+        const icon = e.event_type === 'online' ? '🟢' : '🔴';
+        const lbl  = e.event_type === 'online' ? 'онлайн' : 'офлайн';
+        return `<div style="padding:3px 0;border-bottom:1px solid var(--border);">${icon} ${t} → ${lbl} <span style="color:var(--text-dim);float:right">${fmtAge(e.ts)} назад</span></div>`;
+      }).join('') + '</div>';
+  }
+  host.innerHTML = summary + list;
+}
+
+function togglePwd(id) {
+  const inp = document.getElementById('ef-pwd-' + id);
+  inp.type = inp.type === 'password' ? 'text' : 'password';
+}
+function copyPwd(id) {
+  const v = document.getElementById('ef-pwd-' + id).value;
+  if (!v) return showToast('пароль пуст', true);
+  navigator.clipboard.writeText(v).then(() => showToast('пароль скопирован'));
+}
+
+async function saveDevice(id) {
+  const data = {
+    name:        document.getElementById('ef-name-' + id).value || null,
+    room:        document.getElementById('ef-room-' + id).value || null,
+    device_type: document.getElementById('ef-type-' + id).value,
+    url:         document.getElementById('ef-url-' + id).value || null,
+    description: document.getElementById('ef-desc-' + id).value || null,
+    notes:       document.getElementById('ef-notes-' + id).value || null,
+    monitor_on_dashboard: document.getElementById('ef-monitor-' + id).checked ? 1 : 0,
+  };
+  try {
+    const r = await fetch('/api/network/devices/' + id, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data),
+    });
+    const j = await r.json();
+    if (j.ok) {
+      showToast('сохранено');
+      await loadDevices();
+    } else {
+      showToast('ошибка: ' + j.error, true);
+    }
+  } catch (e) {
+    showToast('ошибка: ' + e.message, true);
+  }
+}
+
+async function deleteDevice(id) {
+  if (!confirm('Удалить устройство из карты? (физически устройство не трогается)')) return;
+  try {
+    const r = await fetch('/api/network/devices/' + id, {method: 'DELETE'});
+    if ((await r.json()).ok) {
+      showToast('удалено');
+      expandedId = null;
+      await loadDevices();
+    }
+  } catch (e) {
+    showToast('ошибка: ' + e.message, true);
+  }
+}
+
+function showAddModal() {
+  // Динамически подставляем placeholder с реальным префиксом подсети
+  const sub = document.getElementById('stat-subnet')?.textContent || '';
+  const m = sub.match(/^(\d+\.\d+\.\d+)\.\d+\/\d+/);
+  if (m) {
+    document.getElementById('add-ip').placeholder = 'например, ' + m[1] + '.51';
+    document.getElementById('add-url').placeholder = 'http://' + m[1] + '.51/';
+  }
+  document.getElementById('add-modal').classList.add('show');
+}
+function hideAddModal() { document.getElementById('add-modal').classList.remove('show'); }
+
+async function submitAdd() {
+  const data = {
+    name:        document.getElementById('add-name').value || null,
+    ip:          document.getElementById('add-ip').value || null,
+    mac:         document.getElementById('add-mac').value || null,
+    device_type: document.getElementById('add-type').value,
+    room:        document.getElementById('add-room').value || null,
+    description: document.getElementById('add-desc').value || null,
+    login:       document.getElementById('add-login').value || null,
+    password:    document.getElementById('add-password').value || null,
+    url:         document.getElementById('add-url').value || null,
+  };
+  try {
+    const r = await fetch('/api/network/devices', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data),
+    });
+    const j = await r.json();
+    if (j.ok) {
+      showToast('добавлено');
+      hideAddModal();
+      ['add-name','add-ip','add-mac','add-room','add-desc','add-login','add-password','add-url']
+        .forEach(id => document.getElementById(id).value = '');
+      await loadDevices();
+    } else {
+      showToast('ошибка: ' + j.error, true);
+    }
+  } catch (e) {
+    showToast('ошибка: ' + e.message, true);
+  }
+}
+
+async function loadDevices() {
+  try {
+    const r = await fetch('/api/network/devices');
+    const j = await r.json();
+    allDevices = j.devices || [];
+    document.getElementById('subnet-info').textContent = j.subnet ? ('подсеть ' + j.subnet) : '';
+    document.getElementById('stat-subnet').textContent = j.subnet || '—';
+    updateCounters();
+    render();
+  } catch (e) {
+    showToast('не удалось загрузить устройства: ' + e.message, true);
+  }
+}
+
+function updateCounters() {
+  const online = allDevices.filter(isOnline).length;
+  const offline = allDevices.length - online;
+  document.getElementById('stat-total').textContent = allDevices.length;
+  document.getElementById('stat-online').textContent = online;
+  document.getElementById('stat-offline').textContent = offline;
+  document.getElementById('cnt-all').textContent = allDevices.length;
+  document.getElementById('cnt-online').textContent = online;
+  document.getElementById('cnt-offline').textContent = offline;
+  // dynamic per-type chips
+  const chipsHost = document.getElementById('type-chips');
+  chipsHost.innerHTML = TYPES_FULL.map(t => {
+    const n = allDevices.filter(d => (d.device_type || 'other') === t.key).length;
+    const active = currentFilter === 'type:' + t.key ? 'active' : '';
+    return '<span class="chip ' + active + '" data-filter="type:' + t.key + '">' +
+           escapeHtml(t.label) + ' <span>' + n + '</span></span>';
+  }).join(' ');
+}
+
+async function loadScanStatus() {
+  try {
+    const j = await (await fetch('/api/network/scan/status')).json();
+    const btn = document.getElementById('btn-scan');
+    if (j.state.running) {
+      btn.disabled = true;
+      btn.textContent = 'Сканирование…';
+      if (!scanPollTimer) scanPollTimer = setInterval(loadScanStatus, 2000);
+    } else {
+      btn.disabled = false;
+      btn.innerHTML = '🔍 Сканировать сеть';
+      if (scanPollTimer) { clearInterval(scanPollTimer); scanPollTimer = null; loadDevices(); }
+    }
+    if (j.last) {
+      const typeLabel = j.last.scan_type === 'auto' ? ' (авто)' : '';
+      document.getElementById('stat-last-scan').textContent =
+        j.last.finished_at ? fmtAge(j.last.finished_at) + ' назад · нашёл ' + (j.last.devices_found || 0) + typeLabel :
+        j.last.status === 'running' ? 'идёт…' : 'не выполнялось';
+    } else {
+      document.getElementById('stat-last-scan').textContent = 'ни разу';
+    }
+    const nextEl = document.getElementById('stat-next-scan');
+    if (j.autoscan_hours <= 0) {
+      nextEl.textContent = 'выключено';
+      nextEl.style.color = 'var(--text-dim)';
+    } else if (j.next_auto_at > 0) {
+      const remaining = j.next_auto_at - Math.floor(Date.now()/1000);
+      nextEl.textContent = remaining > 0
+        ? 'через ' + fmtRemain(remaining)
+        : 'вот-вот';
+      nextEl.style.color = '';
+    } else {
+      nextEl.textContent = 'каждые ' + j.autoscan_hours + ' ч';
+      nextEl.style.color = '';
+    }
+    const pres = j.presence || {};
+    const pEl = document.getElementById('stat-presence');
+    if (pres.last_run) {
+      pEl.textContent = fmtAge(pres.last_run) + ' назад · ' + (pres.last_alive || 0) + ' живых';
+      pEl.style.color = '';
+    } else {
+      pEl.textContent = 'ещё не запускался';
+      pEl.style.color = 'var(--text-dim)';
+    }
+  } catch (e) {}
+}
+
+function fmtRemain(s) {
+  if (s < 60) return s + ' сек';
+  if (s < 3600) return Math.floor(s/60) + ' мин';
+  return Math.floor(s/3600) + ' ч ' + Math.floor((s%3600)/60) + ' мин';
+}
+
+function spark24h(arr) {
+  if (!arr || arr.length === 0) return '';
+  const w = arr.length * 2, h = 12;
+  const bars = arr.map((pct, i) => {
+    let color;
+    if (pct >= 99)      color = '#1D9E75';
+    else if (pct >= 50) color = '#EF9F27';
+    else if (pct >= 1)  color = '#E24B4A';
+    else                color = 'rgba(128,128,128,0.25)';
+    return `<rect x="${i*2}" y="0" width="2" height="${h}" fill="${color}"/>`;
+  }).join('');
+  return `<svg class="spark-24h" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"><title>24h присутствие</title>${bars}</svg>`;
+}
+
+async function loadTypes() {
+  try {
+    const j = await (await fetch('/api/network/types')).json();
+    TYPES_FULL = j.types || [];
+    TYPE_LABEL = {};
+    for (const t of TYPES_FULL) TYPE_LABEL[t.key] = t.label;
+    // re-render dropdowns where types appear
+    const bulkSel = document.getElementById('bulk-type');
+    if (bulkSel) {
+      bulkSel.innerHTML = '<option value="">— не менять —</option>' +
+        TYPES_FULL.map(t => `<option value="${escapeHtml(t.key)}">${escapeHtml(t.label)}</option>`).join('');
+    }
+    const addSel = document.getElementById('add-type');
+    if (addSel) {
+      addSel.innerHTML = TYPES_FULL.map(t =>
+        `<option value="${escapeHtml(t.key)}" ${t.key === 'other' ? 'selected' : ''}>${escapeHtml(t.label)}</option>`
+      ).join('');
+    }
+  } catch (e) {}
+}
+
+async function fingerprintAll() {
+  if (!confirm('Опросить службы у всех устройств с IP? Это займёт ~15–30 минут в фоне.')) return;
+  try {
+    const r = await fetch('/api/network/fingerprint/all', {method: 'POST'});
+    const j = await r.json();
+    if (j.ok) {
+      showToast('в очередь поставлено: ' + j.scheduled);
+      pollFp();
+    } else {
+      showToast(j.error || 'ошибка', true);
+    }
+  } catch (e) { showToast(e.message, true); }
+}
+
+async function syncMikrotik() {
+  const btn = document.getElementById('btn-mt-sync');
+  if (!confirm('Подтянуть имена устройств из DHCP-комментариев MikroTik?\n\nОverride policy: ВСЕГДА перезаписывать (как ты выбрал). Текущие имена будут заменены.')) return;
+  if (btn) { btn.disabled = true; btn.textContent = '⟳ Синхронизация…'; }
+  try {
+    const r = await fetch('/api/mikrotik/sync', {method: 'POST'});
+    const j = await r.json();
+    if (j.ok) {
+      const renamed = (j.details || []).filter(x => x.action === 'renamed').length;
+      const nomatch = (j.details || []).filter(x => x.action === 'no-match').length;
+      const nocomm  = (j.details || []).filter(x => x.action === 'no-comment').length;
+      showToast(`применено: ${j.applied}, пропущено ${j.skipped} (${nocomm} без комментария, ${nomatch} не найдено в БД)`);
+      await loadDevices();
+    } else {
+      showToast(j.error || 'ошибка', true);
+    }
+  } catch (e) { showToast(e.message, true); }
+  finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🔗 Sync MikroTik'; }
+  }
+}
+
+async function pollFp() {
+  try {
+    const j = await (await fetch('/api/network/fingerprint/status')).json();
+    const bar = document.getElementById('fp-progress');
+    const s = j.state;
+    if (s.running || j.queue > 0) {
+      const cur = s.current_ip ? ' · ' + s.current_ip : '';
+      const done = s.done, total = s.total;
+      bar.style.display = 'block';
+      bar.textContent = '🔬 Опрос служб: ' + done + ' / ' + total + cur;
+      if (!fpPollTimer) fpPollTimer = setInterval(pollFp, 3000);
+    } else {
+      bar.style.display = 'none';
+      if (fpPollTimer) { clearInterval(fpPollTimer); fpPollTimer = null; loadDevices(); }
+    }
+  } catch (e) {}
+}
+
+function showSettingsModal() {
+  document.getElementById('settings-modal').classList.add('show');
+  loadSettings();
+  loadMikrotikSettings();
+  renderTypesList();
+}
+function hideSettingsModal() { document.getElementById('settings-modal').classList.remove('show'); }
+
+async function loadSettings() {
+  try {
+    const j = await (await fetch('/api/network/settings')).json();
+    document.getElementById('set-interval').value = String(j.autoscan_hours);
+  } catch (e) {}
+}
+
+async function loadMikrotikSettings() {
+  try {
+    const j = await (await fetch('/api/mikrotik/settings')).json();
+    const ipInput = document.getElementById('mt-set-ip');
+    // Если пользователь явно ничего не задавал — оставим поле пустым,
+    // показав в placeholder реально детектированный gateway. Если задавал —
+    // покажем сохранённое значение.
+    if (j.configured) {
+      ipInput.value = j.ip || '';
+    } else {
+      ipInput.value = '';
+    }
+    if (j.detected_gateway) {
+      ipInput.placeholder = 'auto: ' + j.detected_gateway + ' (default gateway)';
+    }
+    document.getElementById('mt-set-user').value = j.user || 'admin';
+    document.getElementById('mt-set-pw').placeholder = j.configured
+      ? '(пароль сохранён, введи новый чтобы сменить)' : 'пароль admin для MikroTik';
+    document.getElementById('mt-set-result').textContent = '';
+  } catch (e) {}
+}
+
+async function saveMikrotikSettings() {
+  const ip = document.getElementById('mt-set-ip').value.trim();
+  const user = document.getElementById('mt-set-user').value.trim() || 'admin';
+  const pw = document.getElementById('mt-set-pw').value;
+  const result = document.getElementById('mt-set-result');
+  const body = { ip, user };
+  if (pw) body.password = pw;
+  result.textContent = 'проверяем…';
+  result.style.color = 'var(--text-dim)';
+  try {
+    const r = await fetch('/api/mikrotik/settings', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    if (j.ok && j.test && j.test.ok) {
+      result.textContent = '✓ подключение OK: ' + (j.test.identity || 'MikroTik') + ' · ' + (j.test.board || '') + ' · ' + (j.test.version || '');
+      result.style.color = 'var(--ok)';
+      document.getElementById('mt-set-pw').value = '';
+      setTimeout(loadMikrotikSettings, 1500);
+    } else {
+      result.textContent = '✗ ' + (j.test && j.test.error ? j.test.error : 'не удалось подключиться');
+      result.style.color = 'var(--err)';
+    }
+  } catch (e) {
+    result.textContent = '✗ ' + e.message;
+    result.style.color = 'var(--err)';
+  }
+}
+
+async function saveSettings() {
+  const h = parseFloat(document.getElementById('set-interval').value);
+  try {
+    const r = await fetch('/api/network/settings', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({autoscan_hours: h}),
+    });
+    const j = await r.json();
+    if (j.ok) {
+      showToast('настройки сохранены');
+      loadScanStatus();
+    } else {
+      showToast(j.error || 'ошибка', true);
+    }
+  } catch (e) { showToast(e.message, true); }
+}
+
+function renderTypesList() {
+  const host = document.getElementById('types-list');
+  host.innerHTML = TYPES_FULL.map(t => `
+    <div style="display:flex;gap:6px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)">
+      <span class="mono" style="width:90px;color:var(--text-muted)">${escapeHtml(t.key)}</span>
+      <input type="text" value="${escapeHtml(t.label)}" id="tl-${t.key}" style="flex:1">
+      <button class="icon-btn" onclick="renameType('${escapeHtml(t.key)}')">✓</button>
+      ${t.is_builtin ? '<span class="pill" style="opacity:0.5">встроенный</span>'
+                    : `<button class="icon-btn" onclick="deleteType('${escapeHtml(t.key)}')" style="color:var(--err)">🗑</button>`}
+    </div>
+  `).join('');
+}
+
+async function addType() {
+  const key = document.getElementById('new-type-key').value.trim();
+  const label = document.getElementById('new-type-label').value.trim();
+  if (!key || !label) return showToast('ключ и название обязательны', true);
+  try {
+    const r = await fetch('/api/network/types', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({key, label}),
+    });
+    const j = await r.json();
+    if (j.ok) {
+      showToast('добавлено');
+      document.getElementById('new-type-key').value = '';
+      document.getElementById('new-type-label').value = '';
+      await loadTypes();
+      renderTypesList();
+      render();
+    } else {
+      showToast(j.error || 'ошибка', true);
+    }
+  } catch (e) { showToast(e.message, true); }
+}
+
+async function renameType(key) {
+  const label = document.getElementById('tl-' + key).value.trim();
+  if (!label) return;
+  try {
+    const r = await fetch('/api/network/types/' + encodeURIComponent(key), {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({label}),
+    });
+    if ((await r.json()).ok) {
+      showToast('переименовано');
+      await loadTypes();
+      renderTypesList();
+      render();
+    }
+  } catch (e) { showToast(e.message, true); }
+}
+
+async function deleteType(key) {
+  if (!confirm('Удалить тип "' + key + '"?')) return;
+  try {
+    const r = await fetch('/api/network/types/' + encodeURIComponent(key), {method: 'DELETE'});
+    const j = await r.json();
+    if (j.ok) {
+      showToast('удалён');
+      await loadTypes();
+      renderTypesList();
+      render();
+    } else {
+      showToast(j.error || 'ошибка', true);
+    }
+  } catch (e) { showToast(e.message, true); }
+}
+
+document.getElementById('btn-scan').addEventListener('click', async () => {
+  try {
+    const r = await fetch('/api/network/scan', {method: 'POST'});
+    const j = await r.json();
+    if (!j.ok) { showToast(j.error || 'ошибка', true); return; }
+    showToast('сканирование запущено: ' + j.subnet);
+    loadScanStatus();
+  } catch (e) { showToast(e.message, true); }
+});
+
+document.getElementById('search').addEventListener('input', (e) => {
+  currentSearch = e.target.value;
+  render();
+});
+
+document.getElementById('filter-chips').addEventListener('click', (e) => {
+  const c = e.target.closest('.chip');
+  if (!c) return;
+  document.querySelectorAll('.chip').forEach(x => x.classList.toggle('active', x === c));
+  currentFilter = c.dataset.filter;
+  render();
+});
+
+// Theme — sync with index.html via localStorage('theme')
+function applyTheme(theme) {
+  if (theme === 'auto') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.setAttribute('data-theme', theme);
+  localStorage.setItem('theme', theme);
+}
+function toggleTheme() {
+  const cur = localStorage.getItem('theme') || 'auto';
+  const next = cur === 'auto' ? 'light' : cur === 'light' ? 'dark' : 'auto';
+  applyTheme(next);
+  showToast('тема: ' + (next === 'auto' ? 'системная' : next));
+}
+applyTheme(localStorage.getItem('theme') || 'auto');
+
+async function loadMe() {
+  try {
+    const j = await (await fetch('/api/auth/me')).json();
+    if (!j.authenticated) {
+      location.href = '/login?next=' + encodeURIComponent(location.pathname);
+      return;
+    }
+    document.getElementById('logout-user').textContent = j.username;
+  } catch (e) {
+    location.href = '/login';
+  }
+}
+async function doLogout() {
+  if (!confirm('Выйти?')) return;
+  try { await fetch('/api/auth/logout', {method: 'POST'}); } catch (e) {}
+  location.href = '/login';
+}
+loadMe();
+
+window.addEventListener('DOMContentLoaded', async () => {
+  await loadTypes();
+  loadDevices();
+  loadScanStatus();
+  pollFp();
+  document.querySelectorAll('thead th.sortable').forEach(th => {
+    th.addEventListener('click', () => setSort(th.dataset.sort));
+  });
+  updateSortIndicators();
+  setInterval(loadDevices, 30000);   // refresh every 30s
+  setInterval(loadScanStatus, 30000);
+
+  // Делегирование клика по строкам — надёжнее inline onclick на iOS Safari
+  const tbody = document.getElementById('dev-tbody');
+  if (tbody) {
+    tbody.addEventListener('click', (e) => {
+      // не разворачивать карточку при клике на чекбокс, ссылки, инпуты, кнопки внутри уже раскрытой панели
+      if (e.target.closest('[data-noclick],input,button,select,textarea,a,label,.detail-panel,.tag-chip')) return;
+      const tr = e.target.closest('tr.dev-row');
+      if (!tr) return;
+      const id = parseInt(tr.dataset.id, 10);
+      if (!isNaN(id)) toggleExpand(id);
+    });
+  }
+});
+</script>
+</body>
+</html>

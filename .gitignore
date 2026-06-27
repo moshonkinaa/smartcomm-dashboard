@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# Local diagnostic / scratch files (мои throwaway-скрипты)
+/_*.sh
+/_*.py
+/_*.ps1
+/_*.txt
+
+# Test artifacts
+/tmp/
+*.log
+
+# Backup
+*.bak
+*.orig

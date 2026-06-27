@@ -1,0 +1,2189 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0e1116">
+<title>Монитор SmartComm</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231f3a68'/%3E%3Ctext x='16' y='22' font-family='-apple-system,Segoe UI,sans-serif' font-size='15' font-weight='700' text-anchor='middle' fill='white'%3ESC%3C/text%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231f3a68'/%3E%3Ctext x='16' y='22' font-family='-apple-system,Segoe UI,sans-serif' font-size='15' font-weight='700' text-anchor='middle' fill='white'%3ESC%3C/text%3E%3C/svg%3E">
+<link rel="manifest" href="/manifest.json">
+<style>
+  :root {
+    --bg: #ffffff;
+    --bg-card: #f7f8fa;
+    --bg-inner: #ffffff;
+    --bg-hover: #eef0f4;
+    --border: #e3e6ec;
+    --text: #1a1f2c;
+    --text-muted: #6a7383;
+    --text-dim: #9aa1ad;
+    --accent: #1f3a68;
+    --ok: #1D9E75;
+    --warn: #EF9F27;
+    --err: #E24B4A;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1116;
+      --bg-card: #181c24;
+      --bg-inner: #11141b;
+      --bg-hover: #232833;
+      --border: #2a3140;
+      --text: #e6eaf2;
+      --text-muted: #9aa3b0;
+      --text-dim: #707582;
+      --accent: #6da8ff;
+      --ok: #4ec894;
+      --warn: #f2b04e;
+      --err: #ff6b6b;
+    }
+  }
+  /* Explicit theme overrides via data-theme="light|dark" on <html> */
+  html[data-theme="light"] {
+    --bg: #ffffff; --bg-card: #f7f8fa; --bg-inner: #ffffff; --bg-hover: #eef0f4;
+    --border: #e3e6ec; --text: #1a1f2c; --text-muted: #6a7383; --text-dim: #9aa1ad;
+    --accent: #1f3a68; --ok: #1D9E75; --warn: #EF9F27; --err: #E24B4A;
+  }
+  html[data-theme="dark"] {
+    --bg: #0e1116; --bg-card: #181c24; --bg-inner: #11141b; --bg-hover: #232833;
+    --border: #2a3140; --text: #e6eaf2; --text-muted: #9aa3b0; --text-dim: #707582;
+    --accent: #6da8ff; --ok: #4ec894; --warn: #f2b04e; --err: #ff6b6b;
+  }
+  /* Tile criticality — coloured outline when something's wrong */
+  .card.crit-warn { box-shadow: inset 0 0 0 2px rgba(239,159,39,0.55); }
+  .card.crit-err  { box-shadow: inset 0 0 0 2px rgba(226,75,74,0.6); }
+  /* Read-only view (/client URL) hides admin controls */
+  body.readonly .tile-actions,
+  body.readonly .header-actions,
+  body.readonly .refresh-ctl button { display: none !important; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; -webkit-text-size-adjust: 100%; }
+  .container { max-width: 1200px; margin: 0 auto; padding: 14px; }
+  .header { display: flex; justify-content: space-between; align-items: center; padding: 18px 20px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; margin-bottom: 14px; gap: 12px; }
+  .header h1 { font-size: 22px; font-weight: 500; margin: 0; letter-spacing: -0.2px; }
+  .header .subtitle { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+  .header .meta { font-size: 12px; color: var(--text-muted); text-align: right; line-height: 1.6; white-space: nowrap; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px; vertical-align: middle; }
+  .dot.ok { background: var(--ok); }
+  .dot.warn { background: var(--warn); }
+  .dot.err { background: var(--err); }
+  .grid { display: grid; gap: 12px; margin-bottom: 12px; }
+  .grid-4 { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+  .grid-2 { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px; }
+  .card-title { font-size: 12px; color: var(--text-muted); margin: 0 0 6px; }
+  .card-value { font-size: 24px; font-weight: 500; margin: 0; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .card-sub { font-size: 12px; color: var(--text-dim); margin: 6px 0 0; }
+  .bar { height: 6px; background: var(--bg-inner); border-radius: 3px; margin-top: 10px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 3px; transition: width 0.4s, background 0.4s; width: 0; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .btn-action { display: inline-flex; flex-direction: row; align-items: center; justify-content: center; gap: 8px; padding: 10px 14px; font: inherit; font-size: 13px; font-weight: 500; border-radius: 10px; cursor: pointer; border: 1px solid; background: transparent; transition: transform 0.1s, filter 0.15s; min-height: 40px; -webkit-tap-highlight-color: transparent; }
+  .btn-action:active { transform: scale(0.96); filter: brightness(1.1); }
+  .btn-action svg { width: 18px; height: 18px; stroke-width: 1.8; }
+  .tile-actions { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+  .tile-btn { display: inline-flex; align-items: center; gap: 5px; padding: 6px 11px; font: inherit; font-size: 11.5px; font-weight: 500; border-radius: 7px; cursor: pointer; background: var(--bg); border: 1px solid var(--border); color: var(--text); transition: background 0.12s, transform 0.08s, border-color 0.12s; -webkit-tap-highlight-color: transparent; }
+  .tile-btn svg { width: 13px; height: 13px; }
+  .tile-btn:hover { transform: translateY(-1px); }
+  .tile-btn:active { transform: scale(0.97); }
+  .tile-btn.primary { background: rgba(55,138,221,0.13); border-color: rgba(55,138,221,0.45); color: var(--info); }
+  .tile-btn.primary:hover { background: rgba(55,138,221,0.22); }
+  .tile-btn.success { background: rgba(29,158,117,0.13); border-color: rgba(29,158,117,0.45); color: var(--ok); }
+  .tile-btn.success:hover { background: rgba(29,158,117,0.22); }
+  .tile-btn.warn    { background: rgba(187,125,0,0.13); border-color: rgba(187,125,0,0.45); color: #BA7517; }
+  .tile-btn.warn:hover    { background: rgba(187,125,0,0.22); }
+  .tile-btn.danger  { background: rgba(226,75,74,0.13); border-color: rgba(226,75,74,0.45); color: var(--err); }
+  .tile-btn.danger:hover  { background: rgba(226,75,74,0.22); }
+  .spark-24h { display: block; width: 100%; height: 14px; margin-top: 6px; opacity: 0.85; }
+  .header-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .refresh-ctl { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: var(--text-muted); }
+  .refresh-ctl select { padding: 5px 8px; font: inherit; font-size: 12px; background: var(--bg-inner); color: var(--text); border: 1px solid var(--border); border-radius: 6px; }
+  .refresh-ctl button { padding: 6px 8px; font: inherit; line-height: 1; background: var(--bg-inner); color: var(--text); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
+  .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 200; padding: 16px; }
+  .modal-backdrop.show { display: flex; }
+  .modal-box { background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; padding: 20px; max-width: 640px; width: 100%; max-height: 90vh; overflow-y: auto; }
+  .monitored-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+  .monitored-tile { padding: 12px; background: var(--bg-inner); border: 1px solid var(--border); border-radius: 10px; transition: box-shadow 0.15s; }
+  .monitored-tile.online { border-color: rgba(29,158,117,0.45); border-left: 4px solid rgba(29,158,117,0.85); padding-left: 9px; }
+  .monitored-tile.offline {
+    border: 2px solid rgba(226,75,74,0.85);
+    background: rgba(226,75,74,0.08);
+    box-shadow: 0 0 0 1px rgba(226,75,74,0.25);
+    padding: 11px;            /* компенсируем доп. 1px бордера */
+    opacity: 1;
+  }
+  .monitored-tile.offline .name { color: var(--err); }
+  .monitored-tile .name { font-weight: 500; font-size: 14px; margin: 0 0 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .monitored-tile .sub { font-size: 11px; color: var(--text-muted); margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .monitored-tile .status-line { display: flex; justify-content: space-between; align-items: baseline; margin-top: 6px; font-size: 11px; }
+  .btn-action.c-green  { background: rgba(29,158,117,0.12); border-color: rgba(29,158,117,0.4); color: #1D9E75; }
+  .btn-action.c-blue   { background: rgba(55,138,221,0.12); border-color: rgba(55,138,221,0.4); color: #378ADD; }
+  .btn-action.c-purple { background: rgba(127,119,221,0.14); border-color: rgba(127,119,221,0.4); color: #7F77DD; }
+  .btn-action.c-amber  { background: rgba(239,159,39,0.13); border-color: rgba(239,159,39,0.4); color: #BA7517; }
+  .btn-action.c-red    { background: rgba(226,75,74,0.12); border-color: rgba(226,75,74,0.4); color: #E24B4A; }
+  @media (prefers-color-scheme: dark) {
+    .btn-action.c-amber { color: #EF9F27; }
+  }
+  .panel-title { font-size: 13px; color: var(--text-muted); margin: 0 0 10px; display: flex; justify-content: space-between; align-items: baseline; }
+  .panel-title .meta { font-size: 11px; color: var(--text-dim); font-family: var(--mono); }
+  .processes { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+  .processes th, .processes td { padding: 6px 4px; text-align: left; border-bottom: 1px solid var(--border); }
+  .processes tr:last-child td { border-bottom: 0; }
+  .processes th { color: var(--text-muted); font-weight: 400; font-size: 11px; }
+  .processes td.num { text-align: right; }
+  .processes td.cmd { font-family: var(--mono); color: var(--text-muted); }
+  .log { font-family: var(--mono); font-size: 11px; line-height: 1.6; color: var(--text-muted); max-height: 170px; overflow-y: auto; }
+  .log.log-tall { max-height: 380px; }
+  .log div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .chart-wrap { position: relative; width: 100%; height: 130px; margin-top: 4px; }
+  .pill { display: inline-block; padding: 4px 10px; font-size: 11px; border-radius: 14px; background: var(--bg-inner); border: 1px solid var(--border); }
+  .pill.ok { background: rgba(29,158,117,0.13); color: var(--ok); border-color: rgba(29,158,117,0.3); }
+  .pill.warn { background: rgba(239,159,39,0.13); color: var(--warn); border-color: rgba(239,159,39,0.3); }
+  .pill.err { background: rgba(226,75,74,0.13); color: var(--err); border-color: rgba(226,75,74,0.3); }
+  .conn-list { font-family: var(--mono); font-size: 11px; line-height: 1.6; color: var(--text-muted); max-height: 150px; overflow-y: auto; }
+  .users-tab { padding: 5px 12px; font: inherit; font-size: 11.5px; font-weight: 500; border: 1px solid var(--border); background: var(--bg-inner); color: var(--text-muted); cursor: pointer; border-radius: 6px; }
+  .users-tab.active { background: var(--accent); color: white; border-color: var(--accent); }
+  #users-tbody td, #audit-tbody td { padding: 6px 4px; border-bottom: 1px solid var(--border); }
+  #users-tbody tr:hover, #audit-tbody tr:hover { background: var(--bg-hover); }
+  .audit-action-success { color: var(--ok); }
+  .audit-action-fail { color: var(--err); }
+  #btn-logout { background: transparent; border: 1px solid var(--border); border-radius: 6px; padding: 5px 9px; font-size: 13px; cursor: pointer; color: var(--text-muted); }
+  #btn-logout:hover { background: var(--bg-hover); color: var(--err); }
+  /* IP map (дубль с /network для быстрого взгляда) */
+  .ipmap-wrap { padding: 4px 0; overflow-x: auto; }
+  .ipmap-grid { display: grid; grid-template-columns: repeat(16, 1fr); gap: 2px; min-width: 460px; max-width: 720px; font-family: var(--mono); font-size: 10px; }
+  .ipmap-cell { position: relative; aspect-ratio: 1.4 / 1; min-height: 26px; background: var(--bg-inner); border: 1px solid var(--border); border-radius: 3px; display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--text-dim); transition: transform 0.06s; -webkit-tap-highlight-color: transparent; }
+  .ipmap-cell .dot { position: absolute; bottom: 2px; right: 2px; width: 6px; height: 6px; border-radius: 50%; box-shadow: 0 0 0 1px rgba(0,0,0,0.35); }
+  .ipmap-cell .dot.on  { background: #1D9E75; }
+  .ipmap-cell .dot.off { background: #E24B4A; }
+  .ipmap-cell:hover { transform: scale(1.08); border-color: var(--info); }
+  /* Фон = тип адреса (static / dynamic), точка справа-снизу = статус */
+  .ipmap-cell.t-static  { background: rgba(29,158,117,0.4);  color: white; border-color: rgba(29,158,117,0.6); }
+  .ipmap-cell.t-dynamic { background: rgba(239,159,39,0.35); color: white; border-color: rgba(239,159,39,0.55); }
+  .ipmap-cell.t-gateway { background: rgba(166,108,53,0.55); color: white; border-color: rgba(166,108,53,0.8); }
+  .ipmap-cell.self    { background: #5BC5E0; color: white; border-color: #3FB0CC; }
+  .ipmap-legend { display: flex; gap: 12px; margin-top: 10px; font-size: 11px; color: var(--text-muted); flex-wrap: wrap; }
+  .ipmap-legend span { display: inline-flex; align-items: center; gap: 4px; }
+  .ipmap-filters { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 10px; font-size: 11.5px; color: var(--text-muted); }
+  .ipmap-filters label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; padding: 3px 7px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); }
+  .ipmap-filters label:hover { border-color: var(--accent); }
+  .ipmap-filters input { margin: 0; }
+  .ipmap-filters .sw { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+  .ipmap-filters .sw-static  { background: rgba(29,158,117,0.6); }
+  .ipmap-filters .sw-dynamic { background: rgba(239,159,39,0.55); }
+  .ipmap-filters .dot-sw { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+  .ipmap-filters .dot-on  { background: #1D9E75; }
+  .ipmap-filters .dot-off { background: #E24B4A; }
+  /* iRidium API tile — 4-column grid of blocks */
+  .ir-api-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 10px; }
+  .ir-block { background: var(--bg-inner); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+  .ir-block-title { font-size: 11px; font-weight: 500; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; margin: 0 0 8px; }
+  .ir-row { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; border-bottom: 1px dashed var(--border); }
+  .ir-row:last-child { border-bottom: none; }
+  .ir-k { color: var(--text-muted); font-size: 12px; flex-shrink: 0; }
+  .ir-v { color: var(--text); font-size: 12px; font-family: var(--mono); text-align: right; word-break: break-word; }
+  .health-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+  .health-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; background: var(--bg-inner); border: 1px solid var(--border); }
+  .health-item .icon { font-size: 18px; font-weight: 500; min-width: 18px; text-align: center; }
+  .health-item .label { font-size: 13px; font-weight: 500; margin: 0; line-height: 1.2; }
+  .health-item .detail { font-size: 11px; color: var(--text-muted); margin: 2px 0 0; line-height: 1.3; word-break: break-word; }
+  .health-item.ok .icon { color: var(--ok); }
+  .health-item.warn .icon { color: var(--warn); }
+  .health-item.err .icon { color: var(--err); }
+  .health-item.warn { border-color: rgba(239,159,39,0.3); }
+  .health-item.err  { border-color: rgba(226,75,74,0.3); }
+  .argon-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 8px; }
+  .argon-row { display: flex; gap: 12px; padding: 10px 12px; background: var(--bg-inner); border-radius: 10px; border: 1px solid var(--border); }
+  .argon-row.warn { border-color: rgba(239,159,39,0.35); }
+  .argon-row.err  { border-color: rgba(226,75,74,0.35); }
+  .argon-icon { font-weight: 500; min-width: 36px; font-size: 16px; line-height: 1.2; text-align: center; flex-shrink: 0; padding-top: 2px; }
+  .argon-action { font-size: 13.5px; font-weight: 500; margin: 0 0 3px; }
+  .argon-detail { font-size: 11.5px; color: var(--text-muted); line-height: 1.45; margin: 0; }
+  .dmesg-detail { margin-top: 10px; font-family: var(--mono); font-size: 11px; line-height: 1.6; color: var(--text-muted); max-height: 130px; overflow-y: auto; background: var(--bg-inner); padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); }
+  .dmesg-detail div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .per-core { display: flex; gap: 4px; margin-top: 8px; }
+  .per-core .core { flex: 1; height: 4px; background: var(--bg); border-radius: 2px; overflow: hidden; }
+  .per-core .core-fill { height: 100%; transition: width 0.4s, background 0.4s; }
+  .spark { height: 28px; margin-top: 8px; opacity: 0.65; }
+  .spark svg { display: block; }
+  .range-toggle { float: right; display: inline-flex; gap: 0; background: var(--bg-inner); border-radius: 8px; padding: 2px; border: 1px solid var(--border); }
+  .range-toggle button { padding: 4px 12px; font: inherit; font-size: 11px; font-weight: 500; border: none; background: transparent; color: var(--text-muted); cursor: pointer; border-radius: 6px; -webkit-tap-highlight-color: transparent; }
+  .range-toggle button.active { background: var(--bg-hover); color: var(--text); }
+  .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); padding: 12px 22px; background: var(--accent); color: white; border-radius: 10px; font-size: 13px; opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 100; max-width: 90vw; }
+  .toast.show { opacity: 1; }
+  .toast.err { background: var(--err); }
+  @media (max-width: 1024px) {
+    /* iPad portrait + small laptops */
+    .container { padding: 12px; }
+    .header h1 { font-size: 17px; }
+  }
+  @media (max-width: 768px) {
+    .grid-4 { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+    .card-value { font-size: 20px; }
+    .card { padding: 12px 13px; }
+    .header-actions { gap: 5px; }
+    .header-actions .btn-action { padding: 6px 10px; font-size: 12px; }
+    .header-actions .btn-action svg { width: 14px; height: 14px; }
+    .modal-box { padding: 16px; max-height: 92vh; }
+  }
+  @media (max-width: 600px) {
+    /* iPhone portrait */
+    .container { padding: 8px; }
+    .header { flex-direction: column; align-items: stretch; gap: 8px; padding: 12px 14px; }
+    .header h1 { font-size: 16px; line-height: 1.25; }
+    .header .meta { text-align: left; align-self: flex-start; }
+    .header .meta > div { margin-top: 0; display: inline-block; margin-right: 10px; }
+    .refresh-ctl { font-size: 12px; }
+    .refresh-ctl select { padding: 4px 6px; font-size: 12px; }
+    .grid-4 { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+    .grid-2 { grid-template-columns: 1fr; gap: 8px; }
+    .card { padding: 10px 11px; }
+    .card-title { font-size: 11px; }
+    .card-value { font-size: 17px; }
+    .card-sub { font-size: 10.5px; }
+    .tile-actions { gap: 4px; margin-top: 6px; }
+    .tile-btn { padding: 5px 9px; font-size: 10.5px; }
+    .tile-btn svg { width: 11px; height: 11px; }
+    .health-grid { grid-template-columns: 1fr; }
+    .chart-wrap { height: 100px; }
+    .monitored-grid { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+    .panel-title { font-size: 12px; }
+    /* Дашборд: топ-5 таблиц в одну колонку */
+    .grid.grid-2 > .card { padding: 10px; }
+    .processes { font-size: 11px; }
+    .processes th, .processes td { padding: 4px 3px; }
+    .processes td.cmd { max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .log { font-size: 10.5px; }
+    /* IP map: даём горизонтальный скролл, мельче ячейки */
+    .ipmap-grid { min-width: 380px; font-size: 8.5px; gap: 1px; }
+    .ipmap-cell { min-height: 18px; }
+    .ipmap-cell .dot { width: 5px; height: 5px; bottom: 1px; right: 1px; }
+    .ipmap-legend { gap: 8px; font-size: 10px; }
+  }
+  @media (max-width: 420px) {
+    /* Old iPhone / Pi5 narrow phone */
+    .card-value { font-size: 15px; }
+    .header h1 { font-size: 15px; }
+    .header-actions .btn-action { font-size: 11px; padding: 5px 8px; }
+    .refresh-ctl select { font-size: 11px; }
+  }
+  /* Touch tap-target hint — make buttons larger on actual touch devices */
+  @media (hover: none) and (pointer: coarse) {
+    .tile-btn, .btn-action, .refresh-ctl button, .refresh-ctl select { min-height: 36px; }
+    button { -webkit-tap-highlight-color: rgba(0,0,0,0.05); }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <div class="header" style="padding: 12px 16px;">
+    <div style="flex: 1; min-width: 0;">
+      <h1 style="font-size: 18px;">Монитор SmartComm · <span id="platform" style="color: var(--text-muted); font-weight: 400;">…</span></h1>
+      <div class="header-actions" style="margin-top: 6px;">
+        <button class="btn-action c-purple" onclick="location.href='/network'">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="18" r="2.5"/><circle cx="12" cy="12" r="2.5"/></svg>
+          Карта сети
+        </button>
+        <button class="btn-action" id="btn-users" style="display:none; color: var(--text-muted); border-color: var(--border)" onclick="showUsersModal()" title="Пользователи и аудит-лог (только админ)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          Пользователи
+        </button>
+        <button class="btn-action" id="btn-argon-help" style="display:none; color: var(--text-muted); border-color: var(--border)" onclick="showArgonHelp()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          Кнопка Argon
+        </button>
+        <button class="btn-action" style="color: var(--text-muted); border-color: var(--border)" onclick="showAppHelp()" title="О дашборде">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          О дашборде
+        </button>
+        <button class="btn-action" style="color: var(--text-muted); border-color: var(--border)" onclick="showVersionModal()" title="История версий и обновления">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6m0 8v6m-10-10h6m8 0h6"/><circle cx="12" cy="12" r="3"/></svg>
+          <span>Версия <span id="hdr-version">…</span></span>
+        </button>
+      </div>
+    </div>
+    <div class="meta">
+      <div class="refresh-ctl">
+        <select id="refresh-sel" onchange="setRefresh(parseInt(this.value, 10))" title="Период автообновления">
+          <option value="1">1 с</option>
+          <option value="5" selected>5 с</option>
+          <option value="15">15 с</option>
+          <option value="30">30 с</option>
+          <option value="60">1 мин</option>
+          <option value="0">выкл</option>
+        </select>
+        <button onclick="refreshNow()" title="Обновить сейчас">⟳</button>
+        <button onclick="toggleTheme()" id="btn-theme" title="Светлая / тёмная тема">◐</button>
+        <button onclick="requestNotifPermission()" id="btn-notif" title="Включить уведомления браузера" style="display:none">🔔</button>
+        <button onclick="doLogout()" id="btn-logout" title="Выйти" style="margin-left:4px;display:inline-flex;align-items:center;gap:5px"><span id="logout-user" style="font-size:11px;color:var(--text-dim)">—</span><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></button>
+      </div>
+      <div style="margin-top:4px; font-size: 11px;"><span class="dot ok" id="status-dot"></span><span id="last-update">—</span></div>
+    </div>
+  </div>
+
+  <div class="grid grid-4">
+    <div class="card">
+      <p class="card-title">Pi · Температура CPU</p>
+      <p class="card-value" id="temp">—</p>
+      <p class="card-sub" id="temp-sub">—</p>
+      <div class="spark" id="spark-temp"></div>
+    </div>
+    <div class="card">
+      <p class="card-title">Pi · CPU</p>
+      <p class="card-value" id="cpu">—</p>
+      <p class="card-sub" id="cpu-sub">—</p>
+      <div class="bar"><div class="bar-fill" id="cpu-bar"></div></div>
+      <div class="per-core" id="per-core"></div>
+      <div class="spark" id="spark-cpu"></div>
+    </div>
+    <div class="card">
+      <p class="card-title">Pi · RAM</p>
+      <p class="card-value" id="mem">—</p>
+      <p class="card-sub" id="mem-sub">—</p>
+      <div class="bar"><div class="bar-fill" id="mem-bar"></div></div>
+      <div class="spark" id="spark-ram"></div>
+    </div>
+    <div class="card">
+      <p class="card-title">Pi · Диск /</p>
+      <p class="card-value" id="disk">—</p>
+      <p class="card-sub" id="disk-sub">—</p>
+      <div class="bar"><div class="bar-fill" id="disk-bar"></div></div>
+      <div class="spark" id="spark-disk"></div>
+    </div>
+  </div>
+
+  <!-- MikroTik row: CPU / RAM / Disk / WAN-traffic — показывается только если API настроен -->
+  <div class="grid grid-4" id="mt-row" style="display:none;margin-top:12px">
+    <div class="card">
+      <p class="card-title">MikroTik · CPU <span id="mt-cpu-meta" style="font-size:10px;color:var(--text-dim);font-weight:400">—</span></p>
+      <p class="card-value" id="mt-cpu">—</p>
+      <p class="card-sub" id="mt-cpu-sub">—</p>
+      <p class="card-sub" id="mt-uptime-sub" style="margin-top:2px;color:var(--text-dim)">—</p>
+      <div class="bar"><div class="bar-fill" id="mt-cpu-bar"></div></div>
+    </div>
+    <div class="card">
+      <p class="card-title">MikroTik · RAM</p>
+      <p class="card-value" id="mt-ram">—</p>
+      <p class="card-sub" id="mt-ram-sub">—</p>
+      <div class="bar"><div class="bar-fill" id="mt-ram-bar"></div></div>
+    </div>
+    <div class="card">
+      <p class="card-title">MikroTik · диск</p>
+      <p class="card-value" id="mt-disk">—</p>
+      <p class="card-sub" id="mt-disk-sub">—</p>
+      <div class="bar"><div class="bar-fill" id="mt-disk-bar"></div></div>
+    </div>
+    <div class="card">
+      <p class="card-title">MikroTik · WAN <span id="mt-wan-iface" style="font-size:10px;color:var(--text-dim);font-weight:400">—</span></p>
+      <p class="card-value" id="mt-wan" style="font-size:18px">—</p>
+      <p class="card-sub" id="mt-wan-sub">—</p>
+      <div class="tile-actions">
+        <button class="tile-btn primary" id="mt-webfig-btn" title="Открыть веб-интерфейс MikroTik">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+          WebFig
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid grid-4">
+    <div class="card">
+      <p class="card-title">iRidium сервис</p>
+      <p class="card-value" id="irserver-status">—</p>
+      <p class="card-sub" id="irserver-sub">—</p>
+      <p class="card-sub" id="iridium-uptime-sub" style="margin-top:2px">—</p>
+      <div class="tile-actions">
+        <button class="tile-btn success" onclick="openPortal()" title="Открыть веб-портал iRidium на :8888">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+          Портал
+        </button>
+        <button class="tile-btn primary" onclick="confirmAction('restart-iridium', 'Перезапустить iRidium service? Портал :8888 будет недоступен ~3 минуты пока проект грузится.')" title="Перезапустить сервис iRidium (~3 мин простоя)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+          Рестарт
+        </button>
+        <button class="tile-btn success" onclick="confirmAction('start-iridium', 'Запустить iRidium service?')" title="Запустить сервис iRidium (если остановлен)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          Старт
+        </button>
+        <button class="tile-btn danger" onclick="confirmAction('stop-iridium', 'Остановить iRidium service? Будет НЕДОСТУПЕН пока не нажмёшь «Старт» или не перезагрузишь Pi.')" title="Остановить сервис iRidium">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
+          Стоп
+        </button>
+      </div>
+    </div>
+    <div class="card">
+      <p class="card-title">Pi uptime</p>
+      <p class="card-value" id="pi-uptime">—</p>
+      <p class="card-sub" id="pi-sub">—</p>
+      <div class="tile-actions">
+        <button class="tile-btn primary" onclick="openLocalTerminal()" title="SSH-терминал контроллера в браузере">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+          Терминал
+        </button>
+        <button class="tile-btn warn" onclick="confirmAction('reboot', 'Перезагрузить Pi целиком? Контроллер пропадёт на ~30 сек.')" title="Перезагрузить контроллер">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+          Reboot
+        </button>
+        <button class="tile-btn danger" onclick="confirmAction('shutdown', 'Выключить полностью? Включить можно только кнопкой на корпусе.')" title="Выключить контроллер">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
+          Shutdown
+        </button>
+      </div>
+    </div>
+    <div class="card">
+      <p class="card-title">Pi · Сеть eth0</p>
+      <p class="card-value" id="net">—</p>
+      <p class="card-sub" id="net-sub">—</p>
+      <div class="spark" id="spark-net"></div>
+    </div>
+    <div class="card">
+      <p class="card-title">iRidium · детали <a href="#" onclick="event.preventDefault();showIridiumSettings()" style="float:right;font-size:11px;color:var(--text-dim);text-decoration:none">⚙ API</a></p>
+      <p class="card-value" id="ir-version">—</p>
+      <p class="card-sub" id="ir-version-sub">—</p>
+      <p class="card-sub" id="ir-project-sub" style="margin-top:3px">—</p>
+      <p class="card-sub" id="ir-mem-sub" style="margin-top:3px">—</p>
+      <p class="card-sub" id="ir-api-sub" style="margin-top:3px;color:var(--info)">—</p>
+    </div>
+  </div>
+
+  <!-- Мониторинг устройств с карты сети (показывается если есть отмеченные) -->
+  <div class="card" id="monitored-card" style="display:none; margin-bottom:12px">
+    <p class="panel-title">Мониторинг устройств <span class="meta">из карты сети</span></p>
+    <div class="monitored-grid" id="monitored-grid"></div>
+  </div>
+
+  <div class="card" style="margin-bottom:12px">
+    <p class="panel-title">Состояние системы</p>
+    <div class="health-grid" id="health-items">—</div>
+    <div class="dmesg-detail" id="dmesg-detail" style="display:none"></div>
+  </div>
+
+  <div class="grid grid-2">
+    <div class="card">
+      <p class="panel-title">Pi · Температура CPU · <span id="range-label-1">последний час</span>
+        <span class="range-toggle">
+          <button class="active" data-range="1h" onclick="setRange('1h')">1 ч</button>
+          <button data-range="24h" onclick="setRange('24h')">24 ч</button>
+        </span>
+      </p>
+      <div class="chart-wrap"><canvas id="chart-temp"></canvas></div>
+    </div>
+    <div class="card">
+      <p class="panel-title">Pi · Нагрузка CPU · <span id="range-label-2">последний час</span>
+        <span class="range-toggle">
+          <button class="active" data-range="1h" onclick="setRange('1h')">1 ч</button>
+          <button data-range="24h" onclick="setRange('24h')">24 ч</button>
+        </span>
+      </p>
+      <div class="chart-wrap"><canvas id="chart-cpu"></canvas></div>
+    </div>
+  </div>
+
+  <!-- MikroTik history charts — показываются только если есть данные -->
+  <div class="grid grid-2" id="mt-charts-row" style="display:none">
+    <div class="card">
+      <p class="panel-title">MikroTik · CPU · <span id="mt-range-label-1">последний час</span>
+        <span class="range-toggle">
+          <button class="active" data-mt-range="1h" onclick="setMtRange('1h')">1 ч</button>
+          <button data-mt-range="24h" onclick="setMtRange('24h')">24 ч</button>
+        </span>
+      </p>
+      <div class="chart-wrap"><canvas id="chart-mt-cpu"></canvas></div>
+    </div>
+    <div class="card">
+      <p class="panel-title">MikroTik · WAN трафик · <span id="mt-range-label-2">последний час</span>
+        <span class="range-toggle">
+          <button class="active" data-mt-range="1h" onclick="setMtRange('1h')">1 ч</button>
+          <button data-mt-range="24h" onclick="setMtRange('24h')">24 ч</button>
+        </span>
+      </p>
+      <div class="chart-wrap"><canvas id="chart-mt-wan"></canvas></div>
+    </div>
+  </div>
+
+  <div class="grid grid-2">
+    <div class="card">
+      <p class="panel-title">Топ-5 по CPU</p>
+      <table class="processes">
+        <thead><tr><th>PID</th><th>%CPU</th><th>%RAM</th><th>Команда</th></tr></thead>
+        <tbody id="top-cpu"></tbody>
+      </table>
+    </div>
+    <div class="card">
+      <p class="panel-title">Топ-5 по RAM</p>
+      <table class="processes">
+        <thead><tr><th>PID</th><th>%CPU</th><th>%RAM</th><th>Команда</th></tr></thead>
+        <tbody id="top-mem"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:12px">
+    <p class="panel-title">Активные TCP-подключения iRidium <span class="meta">ss -tnp</span></p>
+    <div class="conn-list" id="iridium-conn">—</div>
+  </div>
+
+  <div class="card" style="margin-bottom:12px">
+    <p class="panel-title">iRidium · все данные API <span class="meta" id="ir-api-meta">—</span></p>
+    <div id="ir-api-host" style="font-size:12.5px">—</div>
+  </div>
+
+  <div class="card" style="margin-bottom:12px">
+    <p class="panel-title">iRidium journal · последние 50 <span class="meta" id="ir-log-meta">—</span></p>
+    <div class="log log-tall" id="iridium-log">—</div>
+  </div>
+
+  <!-- IP map (дубль с /network для быстрого взгляда; клик по ячейке → /network) -->
+  <div class="card" id="ipmap-card" style="margin-bottom:12px; display:none">
+    <p class="panel-title">Карта IP · <span style="color:var(--text-dim)">подсеть <span id="ipmap-subnet">—</span></span>
+      <a href="/network" style="color:var(--info);text-decoration:none;font-weight:400;font-size:11px">подробнее →</a>
+    </p>
+    <div class="ipmap-filters">
+      <label><input type="checkbox" id="filt-stat-on"  checked onchange="renderIpMap()"><span class="sw sw-static"></span><span class="dot-sw dot-on"></span>static · онлайн</label>
+      <label><input type="checkbox" id="filt-stat-off" checked onchange="renderIpMap()"><span class="sw sw-static"></span><span class="dot-sw dot-off"></span>static · офлайн</label>
+      <label><input type="checkbox" id="filt-dyn-on"   checked onchange="renderIpMap()"><span class="sw sw-dynamic"></span><span class="dot-sw dot-on"></span>dynamic · онлайн</label>
+      <label><input type="checkbox" id="filt-dyn-off"         onchange="renderIpMap()"><span class="sw sw-dynamic"></span><span class="dot-sw dot-off"></span>dynamic · офлайн</label>
+    </div>
+    <div class="ipmap-wrap">
+      <div class="ipmap-grid" id="ipmap-grid"></div>
+      <div class="ipmap-legend">
+        <span><span style="width:10px;height:10px;border-radius:2px;background:rgba(29,158,117,0.6);display:inline-block"></span>фон = static</span>
+        <span><span style="width:10px;height:10px;border-radius:2px;background:rgba(239,159,39,0.55);display:inline-block"></span>фон = dynamic</span>
+        <span><span style="width:10px;height:10px;border-radius:2px;background:rgba(166,108,53,0.8);display:inline-block"></span>фон = шлюз (.1)</span>
+        <span><span style="width:10px;height:10px;border-radius:2px;background:#5BC5E0;display:inline-block"></span>контроллер</span>
+        <span><span style="width:10px;height:10px;border-radius:2px;background:var(--bg-inner);border:1px solid var(--border);display:inline-block"></span>свободен / скрыт</span>
+        <span><span style="width:6px;height:6px;border-radius:50%;background:#1D9E75;display:inline-block"></span>точка = онлайн</span>
+        <span><span style="width:6px;height:6px;border-radius:50%;background:#E24B4A;display:inline-block"></span>точка = офлайн</span>
+        <span style="color:var(--text-dim);font-size:10.5px">шлюз .1 и self показываются всегда</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- iRidium API settings modal -->
+<div class="modal-backdrop" id="iridium-settings-modal" onclick="if(event.target===this)hideIridiumSettings()">
+  <div class="modal-box" style="max-width: 480px">
+    <h2 style="margin:0 0 8px;font-size:18px;font-weight:500">Доступ к iRidium API</h2>
+    <p style="margin:0 0 14px;font-size:12.5px;color:var(--text-muted)">Service-пароль iRidium-сервера (тот же что в <a href="#" onclick="event.preventDefault();openPortal();return false" style="color:var(--info)">/portal :8888</a>). После сохранения дашборд начнёт показывать данные проекта iRidium: лицензию, число устройств, теги.</p>
+    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:14px">
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text-muted)">Username
+        <input type="text" id="iridium-user" value="admin" style="padding:8px 10px;font:inherit;font-size:13px;background:var(--bg-inner);color:var(--text);border:1px solid var(--border);border-radius:7px">
+      </label>
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text-muted)">Service password
+        <input type="password" id="iridium-pw" placeholder="пароль iRidium (как в веб-портале :8888)" style="padding:8px 10px;font:inherit;font-size:13px;background:var(--bg-inner);color:var(--text);border:1px solid var(--border);border-radius:7px">
+      </label>
+      <div id="iridium-test-result" style="font-size:12px;min-height:18px"></div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:8px">
+      <button class="btn-action" style="color:var(--text);border-color:var(--border)" onclick="hideIridiumSettings()">Отмена</button>
+      <button class="btn-action c-blue" onclick="saveIridiumSettings()">Сохранить и проверить</button>
+    </div>
+  </div>
+</div>
+
+<!-- Version / Updates modal -->
+<div class="modal-backdrop" id="version-modal" onclick="if(event.target===this)hideVersionModal()">
+  <div class="modal-box" style="max-width: 760px">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:12px">
+      <h2 style="margin:0;font-size:19px;font-weight:500">SmartComm Dashboard</h2>
+      <div style="font-size:12px;color:var(--text-dim)" id="ver-current-info">—</div>
+    </div>
+
+    <div id="ver-update-box" style="background:var(--bg-inner);border:1px solid var(--border);border-radius:9px;padding:12px 14px;margin-bottom:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+        <div id="ver-update-status" style="font-size:13px;flex:1;min-width:200px">Проверка обновлений…</div>
+        <div style="display:flex;gap:6px">
+          <button class="tile-btn" id="ver-check-btn" onclick="versionCheck()">⟳ Проверить</button>
+          <button class="tile-btn primary" id="ver-apply-btn" onclick="versionApply()" style="display:none">▼ Обновить</button>
+        </div>
+      </div>
+      <div id="ver-update-detail" style="font-size:11.5px;color:var(--text-dim);margin-top:6px"></div>
+    </div>
+
+    <h3 style="font-size:14px;font-weight:500;margin:14px 0 8px">История версий</h3>
+    <div id="ver-changelog" style="max-height:55vh;overflow-y:auto;padding-right:8px;font-size:12.5px;line-height:1.55">
+      <span style="color:var(--text-dim)">загрузка…</span>
+    </div>
+
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:18px;gap:10px">
+      <a id="ver-github-link" href="https://github.com/moshonkinaa/smartcomm-dashboard" target="_blank" style="color:var(--info);font-size:12px;text-decoration:none">→ GitHub repository</a>
+      <button class="btn-action" style="color:var(--text);border-color:var(--border)" onclick="hideVersionModal()">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<!-- Users management + audit log modal (только админ) -->
+<div class="modal-backdrop" id="users-modal" onclick="if(event.target===this)hideUsersModal()">
+  <div class="modal-box" style="max-width: 920px">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px">
+      <h2 style="margin:0;font-size:19px;font-weight:500">Пользователи и аудит</h2>
+      <div style="display:flex;gap:6px">
+        <button class="users-tab active" data-tab="users" onclick="usersSwitchTab('users')">Пользователи</button>
+        <button class="users-tab"        data-tab="audit" onclick="usersSwitchTab('audit')">Аудит-лог</button>
+        <button class="users-tab"        data-tab="me"    onclick="usersSwitchTab('me')">Мой профиль</button>
+      </div>
+    </div>
+
+    <!-- Users tab -->
+    <div class="users-pane" id="pane-users">
+      <table style="width:100%;font-size:12.5px;border-collapse:collapse">
+        <thead><tr style="text-align:left;color:var(--text-muted);font-size:11px">
+          <th style="padding:6px 4px">ID</th>
+          <th>Логин</th>
+          <th>Роль</th>
+          <th>Создан</th>
+          <th>Последний вход</th>
+          <th>Действия</th>
+        </tr></thead>
+        <tbody id="users-tbody"><tr><td colspan="6" style="color:var(--text-dim);padding:12px">загрузка…</td></tr></tbody>
+      </table>
+      <h3 style="font-size:13px;font-weight:500;margin:18px 0 8px">+ Добавить пользователя</h3>
+      <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end">
+        <div><label class="field-label">Логин (a-z 0-9 _ -)</label><input type="text" id="add-user-name" style="padding:7px 9px;font:inherit;font-size:13px;background:var(--bg-inner);color:var(--text);border:1px solid var(--border);border-radius:7px;width:100%" autocapitalize="off"></div>
+        <div><label class="field-label">Пароль (мин. 4)</label><input type="password" id="add-user-pw" style="padding:7px 9px;font:inherit;font-size:13px;background:var(--bg-inner);color:var(--text);border:1px solid var(--border);border-radius:7px;width:100%"></div>
+        <label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--text-muted);padding:8px"><input type="checkbox" id="add-user-admin"> admin</label>
+      </div>
+      <div style="display:flex;justify-content:flex-end;margin-top:8px">
+        <button class="tile-btn primary" onclick="usersCreate()">+ Создать</button>
+      </div>
+    </div>
+
+    <!-- Audit tab -->
+    <div class="users-pane" id="pane-audit" style="display:none">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;font-size:12px;color:var(--text-muted)">
+        <label>Фильтр пользователь: <input type="text" id="audit-filter-user" oninput="auditLoad()" style="padding:5px 8px;font:inherit;font-size:12px;background:var(--bg-inner);color:var(--text);border:1px solid var(--border);border-radius:6px;width:120px"></label>
+        <label>Limit: <select id="audit-limit" onchange="auditLoad()" style="padding:4px 6px;font:inherit;font-size:12px;background:var(--bg-inner);color:var(--text);border:1px solid var(--border);border-radius:6px"><option>50</option><option selected>200</option><option>500</option><option>1000</option></select></label>
+        <button class="tile-btn" onclick="auditLoad()">⟳ обновить</button>
+      </div>
+      <div style="max-height:60vh;overflow-y:auto">
+        <table style="width:100%;font-size:11.5px;border-collapse:collapse">
+          <thead style="position:sticky;top:0;background:var(--bg-card)"><tr style="text-align:left;color:var(--text-muted);font-size:10.5px">
+            <th style="padding:5px 4px">Время</th>
+            <th>Пользователь</th>
+            <th>IP</th>
+            <th>Действие</th>
+            <th>Цель</th>
+            <th>Результат</th>
+          </tr></thead>
+          <tbody id="audit-tbody"><tr><td colspan="6" style="color:var(--text-dim);padding:12px">загрузка…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Me tab -->
+    <div class="users-pane" id="pane-me" style="display:none">
+      <p style="margin:0 0 14px;font-size:12.5px;color:var(--text-muted)">Текущий пользователь: <b id="me-username">—</b> <span id="me-role" style="color:var(--text-dim)"></span></p>
+      <h3 style="font-size:13px;font-weight:500;margin:0 0 8px">Смена пароля</h3>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div><label class="field-label">Текущий</label><input type="password" id="me-pw-cur" style="padding:7px 9px;font:inherit;font-size:13px;background:var(--bg-inner);color:var(--text);border:1px solid var(--border);border-radius:7px;width:100%"></div>
+        <div><label class="field-label">Новый</label><input type="password" id="me-pw-new" style="padding:7px 9px;font:inherit;font-size:13px;background:var(--bg-inner);color:var(--text);border:1px solid var(--border);border-radius:7px;width:100%"></div>
+      </div>
+      <div id="me-pw-result" style="font-size:12px;min-height:18px;margin-top:6px"></div>
+      <div style="display:flex;justify-content:flex-end;margin-top:8px">
+        <button class="tile-btn primary" onclick="meChangePassword()">Сменить пароль</button>
+      </div>
+    </div>
+
+    <div style="display:flex;justify-content:flex-end;margin-top:18px">
+      <button class="btn-action" style="color:var(--text);border-color:var(--border)" onclick="hideUsersModal()">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<!-- Dashboard help modal -->
+<div class="modal-backdrop" id="app-help-modal" onclick="if(event.target===this)hideAppHelp()">
+  <div class="modal-box" style="max-width: 720px">
+    <h2 style="margin:0 0 6px;font-size:19px;font-weight:500">Монитор SmartComm — что есть</h2>
+    <p style="margin:0 0 16px;font-size:12.5px;color:var(--text-muted)">Локальный диагностический портал контроллера умного дома. Все данные собираются на самом контроллере и хранятся локально (без облака).</p>
+
+    <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">📊 Метрики контроллера (1-й ряд)</h3>
+    <ul style="font-size:12.5px;line-height:1.6;color:var(--text);padding-left:20px;margin:0">
+      <li><b>Температура CPU</b> — текущая + спарклайн за час. Цвет: <span style="color:var(--ok)">&lt;60°C ОК</span>, <span style="color:var(--warn)">60-75 предупреждение</span>, <span style="color:var(--err)">&gt;75 критично</span>. При высоких порогах плитка получает цветную рамку.</li>
+      <li><b>CPU</b> — общая нагрузка %, частота, LoadAvg, мини-полоски по ядрам, спарклайн.</li>
+      <li><b>RAM / Диск /</b> — % использования с полосой и спарклайном.</li>
+    </ul>
+
+    <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">📡 Метрики MikroTik (2-й ряд, если настроен)</h3>
+    <ul style="font-size:12.5px;line-height:1.6;color:var(--text);padding-left:20px;margin:0">
+      <li><b>MikroTik · CPU</b> — load %, частота, ядра, аптайм MikroTik.</li>
+      <li><b>MikroTik · RAM / Диск</b> — % + использовано/всего + версия RouterOS.</li>
+      <li><b>MikroTik · WAN</b> — текущая скорость загрузки/отдачи через интерфейс с default-route, общий трафик за всё время. Кнопка <b>WebFig</b> открывает веб-интерфейс MikroTik.</li>
+    </ul>
+
+    <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">🎛 Управление (3-й ряд)</h3>
+    <ul style="font-size:12.5px;line-height:1.6;color:var(--text);padding-left:20px;margin:0">
+      <li><b>iRidium сервис</b> — статус (активен/мёртв), PID, время запуска. Кнопки <b>Портал :8888</b> и <b>Рестарт</b>.</li>
+      <li><b>Pi uptime</b> — сколько контроллер работает. Кнопки <b>🖥 Терминал</b> (SSH в браузере через WebSSH на :8022), <b>Reboot</b>, <b>Shutdown</b>.</li>
+      <li><b>Сеть eth0</b> — скорости и спарклайн трафика контроллера.</li>
+      <li><b>iRidium · детали</b> — версия билда, имя проекта из .irpz, RAM/потоки процесса, размер БД, число подключённых клиентов. Ссылка <b>⚙ API</b> — настройка пароля iRidium для расширенной интеграции.</li>
+    </ul>
+
+    <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">📡 Мониторинг устройств</h3>
+    <p style="font-size:12.5px;line-height:1.5;margin:0">Плитка появляется если в Карте сети какие-то устройства отмечены галочкой «Показывать на дашборде». У каждого — 24-часовая полоска доступности и подпись «онлайн с DD.MM HH:MM». Офлайн сверху для удобства.</p>
+
+    <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">📈 Большие графики</h3>
+    <ul style="font-size:12.5px;line-height:1.6;padding-left:20px;margin:0">
+      <li><b>Температура CPU контроллера</b> + <b>Нагрузка CPU</b> — переключатель <b>1 ч / 24 ч</b>.</li>
+      <li><b>MikroTik · CPU</b> + <b>MikroTik · WAN трафик</b> (↓ download / ↑ upload в одном графике) — отдельный переключатель 1 ч / 24 ч.</li>
+      <li>История сохраняется в SQLite (<code>/var/lib/smartcomm-dashboard/metrics.db</code>) и переживает рестарты дашборда. Хранится 30 дней.</li>
+    </ul>
+
+    <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">⚙️ Состояние системы</h3>
+    <p style="font-size:12.5px;line-height:1.5;margin:0">Здоровье-проверки: NTP синхронизация, упавшие systemd-юниты, нужен ли ребут, доступные apt-обновления (раз в 6 ч), последние ошибки dmesg, SD-карта (модель/дата), throttle история (был ли undervolt/перегрев).</p>
+
+    <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">📋 Журналы и подключения</h3>
+    <p style="font-size:12.5px;line-height:1.5;margin:0">Топ-5 процессов по CPU и RAM. Активные TCP-подключения iRidium. Отдельная плитка «iRidium · все данные API» (лицензия, проект, список устройств/тегов из <code>:8888/rest/...</code>). 50 последних строк журнала iRidium (новые сверху, цветной индикатор свежести).</p>
+
+    <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">🗺 Карта IP (в самом низу)</h3>
+    <p style="font-size:12.5px;line-height:1.5;margin:0">Дубль карты сети с <a href="/network" style="color:var(--info)">/network</a> для быстрого взгляда: 16×16 ячеек = вся подсеть /24.</p>
+    <ul style="font-size:12.5px;line-height:1.6;padding-left:20px;margin:4px 0 0">
+      <li><b>Фон ячейки = тип адреса</b>: <span style="color:var(--ok)">зелёный</span> = static (DHCP-резервация в MikroTik), <span style="color:#BA7517">жёлтый</span> = dynamic, <span style="color:#A66C35">коричневый</span> = шлюз (<code>.1</code>), <span style="color:#3FB0CC">голубой</span> = этот контроллер, белый = свободен.</li>
+      <li><b>Точка снизу-справа = статус</b>: <span style="color:#1D9E75">зелёная</span> онлайн, <span style="color:#E24B4A">красная</span> офлайн.</li>
+      <li><b>4 чекбокса-фильтра</b>: static·online / static·offline / dynamic·online / dynamic·offline. Можно произвольно мешать. По умолчанию выключен только dynamic·offline — чтобы не показывать временно выключенные DHCP-арендаторы.</li>
+      <li>Шлюз <code>.1</code> и этот контроллер видны всегда независимо от фильтров.</li>
+      <li>Клик по любой ячейке → переход на /network.</li>
+    </ul>
+
+    <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">🎛 Управление в шапке</h3>
+    <ul style="font-size:12.5px;line-height:1.6;padding-left:20px;margin:0">
+      <li><b>Карта сети</b> — открыть страницу инвентаря устройств</li>
+      <li><b>Кнопка Argon</b> — справочник по поведению кнопки на корпусе (показывается только на Pi с Argon ONE V3)</li>
+      <li>Селектор <b>каждые 1/5/15/30 с / 1 мин / выкл</b> — частота обновления страницы</li>
+      <li><b>⟳</b> — обновить сейчас</li>
+      <li><b>◐</b> — переключить тему (auto / light / dark)</li>
+      <li><b>🔔</b> — включить уведомления браузера (alert при offline/online монитор-устройств)</li>
+    </ul>
+
+    <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">📱 PWA</h3>
+    <p style="font-size:12.5px;line-height:1.5;margin:0">На iPad/iPhone в Safari: <b>Поделиться → На экран Домой</b> — превратит дашборд в иконку «Монитор SC», запускается на весь экран без браузерной строки.</p>
+
+    <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">🔒 Режим клиента</h3>
+    <p style="font-size:12.5px;line-height:1.5;margin:0">URL <code style="background:var(--bg-hover);padding:1px 5px;border-radius:3px;font-family:var(--mono)">/client</code> — тот же дашборд без кнопок управления (только просмотр). Безопасно раздать клиенту/гостю.</p>
+
+    <div style="display:flex;justify-content:flex-end;margin-top:18px">
+      <button class="btn-action" style="color:var(--text);border-color:var(--border)" onclick="hideAppHelp()">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<!-- Argon button help modal — open via "Кнопка Argon" button -->
+<div class="modal-backdrop" id="argon-modal" onclick="if(event.target===this)hideArgonHelp()">
+  <div class="modal-box">
+    <h2 style="margin:0 0 14px;font-size:18px;font-weight:500">Кнопка Argon ONE V3 · справочник</h2>
+    <div class="argon-grid">
+      <div class="argon-row">
+        <div class="argon-icon" style="color: var(--text-dim)">·</div>
+        <div>
+          <p class="argon-action">Короткое одиночное нажатие</p>
+          <p class="argon-detail">Ничего не происходит. MCU кейса аппаратно фильтрует случайные касания.</p>
+        </div>
+      </div>
+      <div class="argon-row">
+        <div class="argon-icon" style="color: #378ADD">··</div>
+        <div>
+          <p class="argon-action">Двойной клик (&lt; 1 сек)</p>
+          <p class="argon-detail">Reboot Pi. Systemd корректно гасит iRidium и остальные сервисы перед перезапуском (~30 сек простоя).</p>
+        </div>
+      </div>
+      <div class="argon-row warn">
+        <div class="argon-icon" style="color: var(--warn)">━</div>
+        <div>
+          <p class="argon-action">Удержание 2–3 секунды</p>
+          <p class="argon-detail">Безопасный shutdown. ОС корректно гасит всё, затем EEPROM-настройка POWER_OFF_ON_HALT=1 физически снимает питание. Включить — короткое нажатие.</p>
+        </div>
+      </div>
+      <div class="argon-row err">
+        <div class="argon-icon" style="color: var(--err)">━━</div>
+        <div>
+          <p class="argon-action">Удержание 5+ секунд</p>
+          <p class="argon-detail">⚠ Жёсткий обрыв питания MCU кейса в обход ОС. Риск повредить базу iRidium и ФС — только при полном зависании.</p>
+        </div>
+      </div>
+      <div class="argon-row">
+        <div class="argon-icon" style="color: var(--ok)"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg></div>
+        <div>
+          <p class="argon-action">Любое нажатие на выключенном Pi</p>
+          <p class="argon-detail">Включение. MCU подаёт питание, Pi загружается за ~25 секунд.</p>
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;margin-top:14px">
+      <button class="btn-action" style="color:var(--text);border-color:var(--border)" onclick="hideArgonHelp()">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="/chart.min.js"></script>
+<script>
+function fmtBytes(b) {
+  if (b == null) return "—";
+  if (b < 1024) return b + " B";
+  if (b < 1048576) return (b/1024).toFixed(0) + " KB";
+  if (b < 1073741824) return (b/1048576).toFixed(0) + " MB";
+  return (b/1073741824).toFixed(2) + " GB";
+}
+function fmtRate(b) {
+  if (b < 1024) return b + " B/s";
+  if (b < 1048576) return (b/1024).toFixed(0) + " KB/s";
+  return (b/1048576).toFixed(2) + " MB/s";
+}
+function fmtRateCompact(b) {
+  if (b < 1024) return b + "B";
+  if (b < 1048576) return Math.round(b/1024) + "K";
+  return (b/1048576).toFixed(1) + "M";
+}
+function fmtSecs(s) {
+  s = Math.floor(s);
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (d > 0) return d + ' д ' + h + ' ч ' + m + ' мин';
+  if (h > 0) return h + ' ч ' + m + ' мин';
+  if (m > 0) return m + ' мин';
+  return s + ' сек';
+}
+function compactTs(ts) {
+  if (!ts) return '?';
+  const m = ts.match(/(\d{4})-(\d{2})-(\d{2}) (\d{2}:\d{2})/);
+  return m ? m[3] + '.' + m[2] + ' ' + m[4] : ts.slice(0, 16);
+}
+function openPortal() {
+  window.open('http://' + location.hostname + ':8888', '_blank');
+}
+
+// ============ Theme ============
+function applyTheme(theme) {
+  if (theme === 'auto') {
+    document.documentElement.removeAttribute('data-theme');
+  } else {
+    document.documentElement.setAttribute('data-theme', theme);
+  }
+  localStorage.setItem('theme', theme);
+}
+function toggleTheme() {
+  const cur = localStorage.getItem('theme') || 'auto';
+  const next = cur === 'auto' ? 'light' : cur === 'light' ? 'dark' : 'auto';
+  applyTheme(next);
+  showToast('тема: ' + (next === 'auto' ? 'системная' : next));
+}
+
+// ============ Browser notifications ============
+let _lastOnlineState = new Map();
+function notify(text, opts) {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  try {
+    new Notification('Монитор SmartComm', Object.assign({body: text, icon: '/manifest.json'}, opts || {}));
+  } catch (e) {}
+}
+function requestNotifPermission() {
+  if (!('Notification' in window)) return showToast('браузер не поддерживает уведомления', true);
+  Notification.requestPermission().then(p => {
+    if (p === 'granted') {
+      document.getElementById('btn-notif').style.display = 'none';
+      showToast('уведомления включены');
+      notify('уведомления подключены — алерты по offline устройств будут здесь');
+    }
+  });
+}
+function checkOfflineAlerts(devs) {
+  for (const d of devs) {
+    const prev = _lastOnlineState.get(d.id);
+    if (prev !== undefined && prev !== d.is_online) {
+      const name = d.name || d.hostname || d.ip || ('id' + d.id);
+      if (d.is_online) notify('✓ ' + name + ' снова онлайн');
+      else            notify('✗ ' + name + ' ушёл в офлайн', {tag: 'off-' + d.id, requireInteraction: true});
+    }
+    _lastOnlineState.set(d.id, d.is_online);
+  }
+}
+
+function sparkline(values, color) {
+  values = (values || []).filter(v => v != null && !isNaN(v));
+  if (values.length < 2) return '';
+  const min = Math.min(...values), max = Math.max(...values);
+  const range = (max - min) || 1;
+  const w = 200, h = 28;
+  const step = w / (values.length - 1);
+  const pts = values.map((v, i) =>
+    (i*step).toFixed(1) + ',' + (h - ((v-min)/range)*h).toFixed(1)).join(' ');
+  const fill = color + '22';
+  const area = '0,' + h + ' ' + pts + ' ' + w + ',' + h;
+  return '<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" width="100%" height="' + h + '">' +
+    '<polygon fill="' + fill + '" stroke="none" points="' + area + '"/>' +
+    '<polyline fill="none" stroke="' + color + '" stroke-width="1.5" points="' + pts + '"/></svg>';
+}
+
+function renderPerCore(cores) {
+  const el = document.getElementById('per-core');
+  if (!el) return;
+  if (!cores || cores.length === 0) { el.innerHTML = ''; return; }
+  el.innerHTML = cores.map((p, i) =>
+    '<div class="core" title="C' + i + ': ' + p.toFixed(0) + '%">' +
+      '<div class="core-fill" style="width:' + Math.min(100, p) + '%;background:' + colorByPercent(p, 50, 80) + '"></div>' +
+    '</div>').join('');
+}
+
+let currentRange = '1h';
+function setRange(r) {
+  currentRange = r;
+  // Только кнопки Pi (data-range), не трогать MikroTik (data-mt-range)
+  document.querySelectorAll('button[data-range]').forEach(b => {
+    b.classList.toggle('active', b.dataset.range === r);
+  });
+  const lbl = r === '24h' ? 'последние 24 часа' : 'последний час';
+  document.getElementById('range-label-1').textContent = lbl;
+  document.getElementById('range-label-2').textContent = lbl;
+  loadHistory();
+}
+
+function healthRow(cls, label, detail) {
+  const icons = { ok: '✓', warn: '⚠', err: '✗' };
+  return '<div class="health-item ' + cls + '"><span class="icon">' + icons[cls] +
+    '</span><div><p class="label">' + escapeHtml(label) +
+    '</p><p class="detail">' + escapeHtml(detail || '') + '</p></div></div>';
+}
+
+// Типы лицензий iRidium (наблюдаемые значения; список не публичный)
+const IR_LIC_TYPE = {
+  '0':'Нет','1':'Demo','2':'Trial','3':'Lite','4':'Standard','5':'Pro',
+  '10':'Pro+','11':'Pro (unlim)','12':'Enterprise'
+};
+function _fmtUptimeSec(sec) {
+  sec = Number(sec) || 0;
+  if (sec < 60) return sec + ' сек';
+  const d = Math.floor(sec/86400);
+  const h = Math.floor((sec%86400)/3600);
+  const m = Math.floor((sec%3600)/60);
+  if (d > 0) return d + ' д ' + h + ' ч';
+  if (h > 0) return h + ' ч ' + m + ' мин';
+  return m + ' мин';
+}
+// Открытое состояние <details> переживает auto-refresh (innerHTML стирает DOM-состояние)
+const _detailsOpen = new Set();
+function renderIridiumApi(api, prjFile) {
+  const host = document.getElementById('ir-api-host');
+  const meta = document.getElementById('ir-api-meta');
+  if (!api || !api.configured) {
+    host.innerHTML = '<div style="color:var(--text-dim)">API не настроен — задайте пароль iRidium в плитке «iRidium · детали» (⚙ API)</div>';
+    meta.textContent = 'не настроен';
+    meta.style.color = 'var(--text-dim)';
+    return;
+  }
+  if (!api.ok) {
+    host.innerHTML = '<div style="color:var(--err)">' + escapeHtml(api.error || 'не удалось получить данные') + '</div>';
+    meta.textContent = 'ошибка';
+    meta.style.color = 'var(--err)';
+    return;
+  }
+  if (api.stale) {
+    // Last-known-good из кеша (свежий вызов упал, но в last_good есть актуальные данные)
+    const ageMin = Math.max(1, Math.round((api.stale_age_sec || 0) / 60));
+    meta.innerHTML = '<span style="color:var(--warn)">⚠ устарело ~' + ageMin + ' мин — iRidium временно не отвечает</span>';
+  } else {
+    meta.textContent = 'обновлено · кеш 30 сек';
+    meta.style.color = 'var(--text-dim)';
+  }
+
+  const sys = api.system || [];
+  const lic = api.licence || {};
+  const prj = api.project || {};
+  const devs = api.devices || {};
+  const tags = api.tags || {};
+  const file = prjFile || {};   // top-level iridium_info.project — данные .irpz файла
+  const licLabel = IR_LIC_TYPE[String(lic.type)] || ('тип ' + (lic.type ?? '—'));
+  const prjUptime = prj.run_time ? _fmtUptimeSec(prj.run_time) : '—';
+  const guidShort = prj.guid ? String(prj.guid).slice(0, 8) + '…' + String(prj.guid).slice(-4) : '—';
+  const serialShort = lic.serial ? String(lic.serial).slice(0, 12) + '…' + String(lic.serial).slice(-8) : '—';
+  const fileMtime = file.mtime ? new Date(file.mtime*1000).toLocaleString('ru-RU') : '—';
+  const fileSize = file.size ? (file.size/1024).toFixed(1) + ' КБ' : '—';
+  // API возвращает project.name пустым — реально в проекте оно не задано.
+  // Подменяем на .irpz файл (что и есть «название проекта» с точки зрения файловой системы).
+  const prjNameShow = prj.name || (file.name ? file.name : '<не задано>');
+
+  const row = (k, v) => '<div class="ir-row"><span class="ir-k">' + escapeHtml(k) + '</span><span class="ir-v">' + (v == null || v === '' ? '<span style="color:var(--text-dim)">—</span>' : escapeHtml(String(v))) + '</span></div>';
+
+  const devListOpen = _detailsOpen.has('ir-devs') ? 'open' : '';
+
+  const html = `
+    <div class="ir-api-grid">
+      <div class="ir-block">
+        <div class="ir-block-title">Сервер</div>
+        ${row('Сборка', api.build_full)}
+        ${row('Пользователь API', api.username)}
+        ${row('Время сервера', api.server_time)}
+        ${row('Платформа iRidium', api.platform_iridium)}
+        ${row('Hostname', sys[1])}
+        ${row('ОС / арх.', (sys[2] || '—') + ' / ' + (sys[3] || '—'))}
+        ${row('Модель', sys[4])}
+      </div>
+      <div class="ir-block">
+        <div class="ir-block-title">Лицензия</div>
+        ${row('Тип', licLabel + ' (' + (lic.type ?? '?') + ')')}
+        ${row('Макс. клиентов', lic.server_max_clients)}
+        ${row('Datapoints', lic.datapoints)}
+        ${row('QR-режим', lic.qr_mode === '1' ? 'да' : 'нет')}
+        ${row('Скрипты', lic.script_mode === '1' ? 'да' : 'нет')}
+        ${row('Истекает', lic.expired ? lic.expired : 'бессрочная')}
+        ${row('Серийник', serialShort)}
+        ${(lic.products && lic.products.length) ? row('Продукты', lic.products.join(', ')) : ''}
+      </div>
+      <div class="ir-block">
+        <div class="ir-block-title">Проект</div>
+        ${row('Имя в .irpz', prjNameShow)}
+        ${row('Файл', file.filename)}
+        ${row('Размер', fileSize)}
+        ${row('Изменён', fileMtime)}
+        ${row('Cloud ID', prj.cloud_id)}
+        ${row('GUID', guidShort)}
+        ${row('Тип', prj.type)}
+        ${row('Статус', prj.status === '1' ? 'запущен' : 'остановлен (' + (prj.status ?? '?') + ')')}
+        ${row('Аптайм проекта', prjUptime)}
+      </div>
+      <div class="ir-block">
+        <div class="ir-block-title">Содержимое</div>
+        ${row('Устройств', devs.count)}
+        ${row('Тегов', tags.count)}
+        ${row('Документы', sys[5])}
+        ${row('Логи', sys[7])}
+        ${(devs.names && devs.names.length) ? `
+          <details id="ir-devs" ${devListOpen} style="margin-top:8px">
+            <summary style="cursor:pointer;color:var(--text-muted);font-size:11.5px;user-select:none">Список устройств (${devs.names.length})</summary>
+            <div style="margin-top:6px;display:flex;flex-direction:column;gap:3px;font-size:11.5px">
+              ${devs.names.map((n, i) => '<div><span style="color:var(--text-dim);font-family:var(--mono);width:24px;display:inline-block">' + (i+1) + '.</span> ' + escapeHtml(n) + '</div>').join('')}
+            </div>
+          </details>` : ''}
+      </div>
+    </div>`;
+  host.innerHTML = html;
+  // Восстанавливаем listener'ы для запоминания состояния — innerHTML их стёр
+  host.querySelectorAll('details[id]').forEach(d => {
+    d.addEventListener('toggle', () => {
+      if (d.open) _detailsOpen.add(d.id); else _detailsOpen.delete(d.id);
+    });
+  });
+}
+
+function renderHealth(h, throttle) {
+  if (!h) { document.getElementById('health-items').innerHTML = ''; return; }
+  const items = [];
+
+  items.push(h.ntp_synced
+    ? healthRow('ok',  'NTP', 'часы синхронизированы')
+    : healthRow('err', 'NTP', 'НЕ синхронизирован — логи будут с неверным временем'));
+
+  if (h.failed_units.length === 0) {
+    items.push(healthRow('ok', 'systemd', 'все юниты OK'));
+  } else {
+    items.push(healthRow('err', 'упавших юнитов: ' + h.failed_units.length, h.failed_units.join(', ')));
+  }
+
+  if (h.reboot.required) {
+    items.push(healthRow('warn', 'нужен ребут', h.reboot.pkgs.length ? 'после: ' + h.reboot.pkgs.join(', ') : 'после apt upgrade'));
+  } else {
+    items.push(healthRow('ok', 'ребут', 'не нужен'));
+  }
+
+  const u = h.updates;
+  if (u.count == null) {
+    items.push(healthRow('warn', 'обновления', 'проверка в фоне (раз в 6 ч)…'));
+  } else if (u.count === 0) {
+    items.push(healthRow('ok', 'обновления', 'всё актуально'));
+  } else {
+    items.push(healthRow('warn', 'доступно обновлений: ' + u.count, 'apt list --upgradable'));
+  }
+
+  if (h.dmesg_errors.length === 0) {
+    items.push(healthRow('ok', 'dmesg', 'без критичных ошибок'));
+  } else {
+    items.push(healthRow('warn', 'dmesg: ' + h.dmesg_errors.length + ' ошибок', 'см. ниже'));
+  }
+
+  const sd = h.sdcard;
+  if (!sd) {
+    items.push(healthRow('ok', 'SD card', 'не обнаружена'));
+  } else if (sd.card_type === 'MMC' && sd.life_a_pct_max != null) {
+    // eMMC with SMART available
+    let cls = 'ok';
+    if (sd.pre_eol_raw === 2 || sd.life_a_pct_max >= 80) cls = 'warn';
+    if (sd.pre_eol_raw === 3 || sd.life_a_pct_max >= 100) cls = 'err';
+    items.push(healthRow(cls, 'eMMC ' + (sd.name || ''),
+      (sd.pre_eol || '?') + ' · ≤' + sd.life_a_pct_max + '% износа'));
+  } else {
+    // Plain SD card — no SMART. Show static info only.
+    const parts = [];
+    if (sd.manufacturer) parts.push(sd.manufacturer);
+    if (sd.name) parts.push(sd.name);
+    if (sd.size_h) parts.push(sd.size_h);
+    if (sd.date) parts.push('от ' + sd.date);
+    const detail = parts.length ? parts.join(' · ') : 'данные недоступны';
+    items.push(healthRow('ok', 'SD card', detail + ' · SMART не поддерживается'));
+  }
+
+  if (throttle && throttle.flags) {
+    const tf = throttle.flags;
+    const everBad = tf.undervolt_ever || tf.freq_capped_ever || tf.throttled_ever || tf.soft_temp_ever;
+    const nowBad  = tf.undervolt_now  || tf.freq_capped_now  || tf.throttled_now  || tf.soft_temp_now;
+    if (!everBad) {
+      items.push(healthRow('ok', 'throttle ' + throttle.raw, 'всё чисто, ни разу не срабатывал'));
+    } else {
+      const parts = [];
+      if (tf.undervolt_ever)  parts.push('undervolt' + (tf.undervolt_now ? ' СЕЙЧАС' : ''));
+      if (tf.freq_capped_ever) parts.push('freq capped' + (tf.freq_capped_now ? ' СЕЙЧАС' : ''));
+      if (tf.throttled_ever)  parts.push('throttled' + (tf.throttled_now ? ' СЕЙЧАС' : ''));
+      if (tf.soft_temp_ever)  parts.push('soft temp limit' + (tf.soft_temp_now ? ' СЕЙЧАС' : ''));
+      items.push(healthRow(nowBad ? 'err' : 'warn', 'throttle ' + throttle.raw, parts.join(' · ')));
+    }
+  }
+
+  document.getElementById('health-items').innerHTML = items.join('');
+
+  const dd = document.getElementById('dmesg-detail');
+  if (h.dmesg_errors.length === 0) {
+    dd.style.display = 'none';
+  } else {
+    dd.style.display = '';
+    dd.innerHTML = h.dmesg_errors.map(l => '<div>' + escapeHtml(l) + '</div>').join('');
+  }
+}
+function colorByPercent(p, lo, hi) {
+  if (p == null) return getComputedStyle(document.documentElement).getPropertyValue('--text-dim');
+  if (p < lo) return getComputedStyle(document.documentElement).getPropertyValue('--ok');
+  if (p < hi) return getComputedStyle(document.documentElement).getPropertyValue('--warn');
+  return getComputedStyle(document.documentElement).getPropertyValue('--err');
+}
+function setBar(id, pct, lo, hi) {
+  const bar = document.getElementById(id);
+  bar.style.width = Math.min(100, pct || 0) + '%';
+  bar.style.background = colorByPercent(pct, lo, hi);
+}
+
+let tempChart, cpuChart;
+function makeCharts() {
+  const isDark = matchMedia('(prefers-color-scheme: dark)').matches;
+  const gridColor = isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)';
+  const tickColor = isDark ? '#707582' : '#9aa1ad';
+  const baseOpts = (anchorZero) => ({
+    responsive: true, maintainAspectRatio: false,
+    animation: { duration: 250 },
+    plugins: { legend: { display: false }, tooltip: { displayColors: false } },
+    scales: {
+      x: { ticks: { color: tickColor, font: { size: 10 }, maxTicksLimit: 6 }, grid: { color: gridColor } },
+      y: {
+        ticks: { color: tickColor, font: { size: 10 }, maxTicksLimit: 5 },
+        grid: { color: gridColor },
+        beginAtZero: anchorZero,
+        grace: '8%'
+      }
+    },
+    elements: { line: { tension: 0.3, borderWidth: 2 }, point: { radius: 0 } }
+  });
+  tempChart = new Chart(document.getElementById('chart-temp'), {
+    type: 'line',
+    data: { labels: [], datasets: [{ data: [], borderColor: '#EF9F27', backgroundColor: 'rgba(239,159,39,0.15)', fill: true }] },
+    options: baseOpts(false)
+  });
+  cpuChart = new Chart(document.getElementById('chart-cpu'), {
+    type: 'line',
+    data: { labels: [], datasets: [{ data: [], borderColor: '#1D9E75', backgroundColor: 'rgba(29,158,117,0.15)', fill: true }] },
+    options: baseOpts(true)
+  });
+  // MikroTik charts
+  mtCpuChart = new Chart(document.getElementById('chart-mt-cpu'), {
+    type: 'line',
+    data: { labels: [], datasets: [{ data: [], borderColor: '#7F77DD', backgroundColor: 'rgba(127,119,221,0.15)', fill: true }] },
+    options: baseOpts(true)
+  });
+  // WAN chart с двумя датасетами (rx + tx)
+  const wanOpts = baseOpts(true);
+  wanOpts.plugins.legend = { display: true, position: 'top', labels: { font: { size: 10 }, boxWidth: 10, color: tickColor } };
+  wanOpts.scales.y.ticks.callback = function(v) {
+    if (v >= 1024) return (v/1024).toFixed(1) + ' МБ/с';
+    if (v >= 1)    return v.toFixed(0) + ' КБ/с';
+    return '0';
+  };
+  wanOpts.plugins.tooltip = {
+    displayColors: true,
+    callbacks: { label: function(ctx) { const v = ctx.raw; return ctx.dataset.label + ': ' + (v >= 1024 ? (v/1024).toFixed(2)+' МБ/с' : v.toFixed(1)+' КБ/с'); } }
+  };
+  mtWanChart = new Chart(document.getElementById('chart-mt-wan'), {
+    type: 'line',
+    data: { labels: [], datasets: [
+      { label: '↓ download', data: [], borderColor: '#378ADD', backgroundColor: 'rgba(55,138,221,0.15)', fill: true },
+      { label: '↑ upload',   data: [], borderColor: '#EF9F27', backgroundColor: 'rgba(239,159,39,0.12)', fill: true },
+    ]},
+    options: wanOpts
+  });
+}
+
+let mtCpuChart, mtWanChart;
+let mtRange = '1h';
+function setMtRange(r) {
+  mtRange = r;
+  document.querySelectorAll('[data-mt-range]').forEach(b => b.classList.toggle('active', b.dataset.mtRange === r));
+  document.getElementById('mt-range-label-1').textContent = r === '1h' ? 'последний час' : 'последние 24 часа';
+  document.getElementById('mt-range-label-2').textContent = r === '1h' ? 'последний час' : 'последние 24 часа';
+  loadMtHistory();
+}
+async function loadMtHistory() {
+  try {
+    const r = await fetch('/api/mikrotik/history?range=' + mtRange);
+    const j = await r.json();
+    const row = document.getElementById('mt-charts-row');
+    if (!j.ts || j.ts.length === 0) {
+      row.style.display = 'none';
+      return;
+    }
+    row.style.display = '';
+    const labels = j.ts.map(t => new Date(t*1000).toLocaleTimeString('ru-RU', {hour:'2-digit',minute:'2-digit'}));
+    mtCpuChart.data.labels = labels;
+    mtCpuChart.data.datasets[0].data = j.cpu;
+    mtCpuChart.update('none');
+    mtWanChart.data.labels = labels;
+    // bps → КБ/с для красоты
+    mtWanChart.data.datasets[0].data = j.rx_bps.map(b => +(b/1024).toFixed(2));
+    mtWanChart.data.datasets[1].data = j.tx_bps.map(b => +(b/1024).toFixed(2));
+    mtWanChart.update('none');
+  } catch (e) {
+    // тихо
+  }
+}
+
+async function loadStatus() {
+  try {
+    const r = await fetch('/api/status');
+    if (!r.ok) throw new Error('http ' + r.status);
+    const d = await r.json();
+    document.getElementById('platform').textContent = d.platform_name || d.host || '—';
+    document.getElementById('last-update').textContent = new Date(d.ts*1000).toLocaleTimeString('ru-RU');
+
+    const irActive = d.irserver.active === 'active';
+    document.getElementById('status-dot').className = 'dot ' + (irActive ? 'ok' : 'err');
+
+    const t = d.cpu.temp_c;
+    document.getElementById('temp').textContent = t != null ? t.toFixed(1) + ' °C' : '—';
+    document.getElementById('temp').style.color = colorByPercent(t, 60, 75);
+    document.getElementById('temp-sub').textContent = 'throttle: ' + d.throttle.raw + (d.throttle.flags.undervolt_ever ? ' · был undervolt' : ' · норма');
+    // Criticality outline
+    setCardCrit('temp', t != null && t >= 75 ? 'err' : t != null && t >= 65 ? 'warn' : 'ok');
+    setCardCrit('cpu',  d.cpu.usage >= 90 ? 'err' : d.cpu.usage >= 70 ? 'warn' : 'ok');
+    setCardCrit('mem',  d.mem.percent >= 90 ? 'err' : d.mem.percent >= 75 ? 'warn' : 'ok');
+    setCardCrit('disk', d.disk_root.percent >= 90 ? 'err' : d.disk_root.percent >= 80 ? 'warn' : 'ok');
+    // setCardCrit irserver-status выставляется ниже с учётом portAlive + loadingProject
+
+    document.getElementById('cpu').textContent = d.cpu.usage.toFixed(0) + ' %';
+    document.getElementById('cpu-sub').textContent = (d.cpu.freq_mhz || '?') + ' МГц · LA ' + d.system.loadavg.join(' ');
+    setBar('cpu-bar', d.cpu.usage, 50, 80);
+    renderPerCore(d.cpu.per_core);
+
+    document.getElementById('mem').textContent = d.mem.percent.toFixed(0) + ' %';
+    document.getElementById('mem').style.color = colorByPercent(d.mem.percent, 70, 90);
+    document.getElementById('mem-sub').textContent = fmtBytes(d.mem.used) + ' / ' + fmtBytes(d.mem.total) + ' · swap ' + fmtBytes(d.mem.swap_used);
+    setBar('mem-bar', d.mem.percent, 70, 90);
+
+    document.getElementById('disk').textContent = d.disk_root.percent.toFixed(0) + ' %';
+    document.getElementById('disk').style.color = colorByPercent(d.disk_root.percent, 75, 90);
+    document.getElementById('disk-sub').textContent = fmtBytes(d.disk_root.used) + ' / ' + fmtBytes(d.disk_root.total);
+    setBar('disk-bar', d.disk_root.percent, 75, 90);
+
+    // iRidium service: учитываем не только systemctl, но и реальную доступность портала :8888
+    // После рестарта процесс active, но порт мёртв ещё ~3 мин (загрузка проекта).
+    const irHttp = (d.iridium_info && d.iridium_info.http) || {};
+    const portAlive = irHttp.alive === true;
+    const ageSec = d.irserver.uptime_sec || 0;
+    const loadingProject = irActive && !portAlive && ageSec < 240;   // первые 4 мин
+
+    let statusText, statusColor, statusCss;
+    if (!irActive) {
+      statusText = 'остановлен'; statusCss = 'err';
+    } else if (loadingProject) {
+      statusText = 'загрузка…'; statusCss = 'warn';
+    } else if (!portAlive) {
+      statusText = 'порт не отвечает'; statusCss = 'err';
+    } else {
+      statusText = 'активен'; statusCss = 'ok';
+    }
+    statusColor = getComputedStyle(document.documentElement).getPropertyValue('--' + statusCss);
+    document.getElementById('irserver-status').textContent = statusText;
+    document.getElementById('irserver-status').style.color = statusColor;
+    setCardCrit('irserver-status', statusCss === 'ok' ? 'ok' : statusCss);
+
+    let subText = 'PID ' + d.irserver.pid + ' · с ' + compactTs(d.irserver.started);
+    if (portAlive && irHttp.ms != null) {
+      subText += ' · :8888 ' + irHttp.ms + ' мс';
+    }
+    document.getElementById('irserver-sub').textContent = subText;
+
+    document.getElementById('pi-uptime').textContent = d.system.uptime_fmt;
+    document.getElementById('pi-sub').textContent = 'kernel ' + d.system.kernel.split('-')[0];
+
+    const irUpSubEl = document.getElementById('iridium-uptime-sub');
+    if (loadingProject) {
+      const left = Math.max(0, 200 - ageSec);
+      irUpSubEl.textContent = 'грузит проект, ещё ~' + Math.ceil(left) + ' сек';
+      irUpSubEl.style.color = getComputedStyle(document.documentElement).getPropertyValue('--warn');
+    } else if (irActive && d.irserver.uptime_sec != null) {
+      irUpSubEl.textContent = 'uptime: ' + fmtSecs(d.irserver.uptime_sec);
+      irUpSubEl.style.color = '';
+    } else {
+      irUpSubEl.textContent = 'процесс мёртв';
+      irUpSubEl.style.color = getComputedStyle(document.documentElement).getPropertyValue('--err');
+    }
+
+    document.getElementById('net').textContent = '↓' + fmtRateCompact(d.net.rx_rate) + ' ↑' + fmtRateCompact(d.net.tx_rate);
+    document.getElementById('net-sub').textContent = 'всего ↓ ' + fmtBytes(d.net.rx_total) + ' ↑ ' + fmtBytes(d.net.tx_total);
+
+    const ii = d.iridium_info || {};
+    if (ii.version) {
+      document.getElementById('ir-version').textContent = 'build ' + ii.version.build;
+      document.getElementById('ir-version-sub').textContent = ii.version.edition + ' · ' + ii.version.date;
+    } else {
+      document.getElementById('ir-version').textContent = '?';
+      document.getElementById('ir-version-sub').textContent = 'не удалось прочитать';
+    }
+    if (ii.project) {
+      const nice = ii.project.friendly_name ? ii.project.friendly_name + ' · ' : '';
+      document.getElementById('ir-project-sub').textContent =
+        'проект: ' + nice + ii.project.filename + ' · ' + fmtBytes(ii.project.size);
+    } else {
+      document.getElementById('ir-project-sub').textContent = 'проект не загружен';
+    }
+    // Append iRidium clients count to memory sub line, if available
+    if (ii.clients != null) {
+      const memSub = document.getElementById('ir-mem-sub');
+      memSub.textContent = memSub.textContent + ' · клиентов: ' + ii.clients;
+    }
+    // iRidium HTTP API data (when configured + auth OK)
+    const apiSub = document.getElementById('ir-api-sub');
+    const api = ii.api || {};
+    if (!api.configured) {
+      apiSub.innerHTML = '<a href="#" onclick="event.preventDefault();showIridiumSettings()" style="color:var(--info)">⚙ настроить API для подробностей</a>';
+    } else if (!api.ok) {
+      apiSub.innerHTML = '<span style="color:var(--err)">API: ' + escapeHtml(api.error || 'ошибка') + '</span>';
+    } else if (api.stale) {
+      apiSub.innerHTML = '<span style="color:var(--warn)">API: данные ~' + Math.max(1, Math.round((api.stale_age_sec||0)/60)) + ' мин назад (iRidium тормозит)</span>';
+    } else {
+      const lic = api.licence || {};
+      const typeLabel = lic.type === '11' ? 'Pro' : lic.type === '4' ? 'Lite' : 'тип ' + (lic.type || '?');
+      const parts = ['lic. ' + typeLabel];
+      if (lic.server_max_clients) parts.push('до ' + lic.server_max_clients + ' клиентов');
+      if (lic.datapoints) parts.push(lic.datapoints + ' datapoints');
+      const dev = api.devices || {};
+      const tags = api.tags || {};
+      if (dev.count) parts.push(dev.count + ' устройств');
+      if (tags.count) parts.push(tags.count + ' тегов');
+      apiSub.textContent = parts.join(' · ');
+      apiSub.style.color = '';
+    }
+    // Argon button visibility — only if Pi with argon module present
+    const argonBtn = document.getElementById('btn-argon-help');
+    if (argonBtn) argonBtn.style.display = d.argon_installed ? '' : 'none';
+    const parts = [];
+    if (ii.proc) {
+      parts.push('RAM ' + fmtBytes((ii.proc.rss_kb || 0) * 1024));
+      parts.push((ii.proc.threads || '?') + ' потоков');
+    }
+    if (ii.db_size != null) {
+      parts.push('БД ' + fmtBytes(ii.db_size));
+    }
+    document.getElementById('ir-mem-sub').textContent = parts.length ? parts.join(' · ') : 'процесс не найден';
+
+
+    document.getElementById('top-cpu').innerHTML = d.top_cpu.map(p =>
+      `<tr><td>${p.pid}</td><td class="num">${p.cpu.toFixed(1)}</td><td class="num">${p.mem.toFixed(1)}</td><td class="cmd">${escapeHtml(p.cmd)}</td></tr>`
+    ).join('');
+    document.getElementById('top-mem').innerHTML = d.top_mem.map(p =>
+      `<tr><td>${p.pid}</td><td class="num">${p.cpu.toFixed(1)}</td><td class="num">${p.mem.toFixed(1)}</td><td class="cmd">${escapeHtml(p.cmd)}</td></tr>`
+    ).join('');
+
+    const conns = d.iridium_conn;
+    document.getElementById('iridium-conn').innerHTML = conns.length === 0
+      ? '<div style="color:var(--text-dim)">нет активных подключений</div>'
+      : conns.map(c => `<div>${escapeHtml(c.local)} ← ${escapeHtml(c.peer)} <span style="color:var(--text-dim)">[${c.state}]</span></div>`).join('');
+
+    document.getElementById('iridium-log').innerHTML = d.iridium_log.length === 0
+      ? '<div style="color:var(--text-dim)">—</div>'
+      : d.iridium_log.map(l => '<div>' + escapeHtml(l) + '</div>').join('');
+
+    const lm = d.iridium_log_meta || {};
+    const metaEl = document.getElementById('ir-log-meta');
+    if (lm.latest_age_sec == null) {
+      metaEl.textContent = 'нет записей';
+      metaEl.style.color = '';
+    } else {
+      const age = lm.latest_age_sec;
+      const ageStr = age < 60 ? age + ' сек' : age < 3600 ? Math.floor(age/60) + ' мин' : Math.floor(age/3600) + ' ч';
+      const ratePart = lm.per_min != null ? ' · ' + lm.per_min + '/мин' : '';
+      metaEl.textContent = 'последняя ' + ageStr + ' назад' + ratePart;
+      metaEl.style.color = age < 60
+        ? getComputedStyle(document.documentElement).getPropertyValue('--ok')
+        : age < 300
+          ? getComputedStyle(document.documentElement).getPropertyValue('--warn')
+          : getComputedStyle(document.documentElement).getPropertyValue('--err');
+    }
+
+    renderIridiumApi(d.iridium_info && d.iridium_info.api, d.iridium_info && d.iridium_info.project);
+    renderHealth(d.health, d.throttle);
+
+    // Live append: каждый loadStatus добавляет точку в график.
+    // Это даёт мгновенную видимость графика после открытия страницы (до того
+    // как loadHistory с полной историей доедет). Кроме того, если есть только
+    // одна точка (только что после рестарта) — линия рисуется сразу.
+    if (tempChart && d.cpu.temp_c != null) {
+      const tm = new Date(d.ts*1000).toLocaleTimeString('ru-RU', {hour:'2-digit',minute:'2-digit'});
+      const lastLabel = tempChart.data.labels[tempChart.data.labels.length - 1];
+      // Не добавляем точку с тем же минутным timestamp дважды
+      if (lastLabel !== tm) {
+        tempChart.data.labels.push(tm);
+        tempChart.data.datasets[0].data.push(d.cpu.temp_c);
+        cpuChart.data.labels.push(tm);
+        cpuChart.data.datasets[0].data.push(d.cpu.usage);
+        // Обрезаем буфер чтобы не рос бесконечно (для 1h: ~60 точек, 24h: 288)
+        const maxPts = currentRange === '24h' ? 288 : 60;
+        while (tempChart.data.labels.length > maxPts) {
+          tempChart.data.labels.shift();
+          tempChart.data.datasets[0].data.shift();
+          cpuChart.data.labels.shift();
+          cpuChart.data.datasets[0].data.shift();
+        }
+        tempChart.update('none');
+        cpuChart.update('none');
+      }
+    }
+
+  } catch (e) {
+    document.getElementById('status-dot').className = 'dot err';
+    const lu = document.getElementById('last-update');
+    if (lu) lu.textContent = 'нет связи: ' + e.message;
+  }
+}
+
+async function loadHistory() {
+  try {
+    const [rBig, rSpark] = await Promise.all([
+      fetch('/api/history?range=' + currentRange).then(x => x.json()),
+      currentRange === '1h' ? Promise.resolve(null) : fetch('/api/history?range=1h').then(x => x.json()),
+    ]);
+    // Не затираем уже отрисованные графики пустым ответом — иначе мерцает на refresh
+    // когда история ещё не успела загрузиться или вернулась пустая.
+    if (rBig.ts && rBig.ts.length > 0) {
+      const labels = rBig.ts.map(t => new Date(t*1000).toLocaleTimeString('ru-RU', {hour:'2-digit',minute:'2-digit'}));
+      tempChart.data.labels = labels;
+      tempChart.data.datasets[0].data = rBig.temp;
+      tempChart.update('none');
+      cpuChart.data.labels = labels;
+      cpuChart.data.datasets[0].data = rBig.cpu;
+      cpuChart.update('none');
+    }
+
+    // Sparklines всегда показывают 1h, независимо от range больших графиков
+    const sp = rSpark || rBig;
+    if (sp && sp.ts && sp.ts.length > 0) {
+      document.getElementById('spark-temp').innerHTML = sparkline(sp.temp, '#EF9F27');
+      document.getElementById('spark-cpu').innerHTML  = sparkline(sp.cpu,  '#1D9E75');
+      document.getElementById('spark-ram').innerHTML  = sparkline(sp.ram,  '#7F77DD');
+      document.getElementById('spark-disk').innerHTML = sparkline(sp.disk, '#378ADD');
+      document.getElementById('spark-net').innerHTML  = sparkline(sp.net,  '#0a7a8a');
+    }
+  } catch (e) {}
+}
+
+function escapeHtml(s) {
+  return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function showToast(msg, isErr) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (isErr ? ' err' : '');
+  setTimeout(() => t.className = 'toast', 4000);
+}
+
+async function confirmAction(action, prompt) {
+  if (!confirm(prompt)) return;
+  try {
+    const r = await fetch('/api/action/' + action, { method: 'POST' });
+    const d = await r.json();
+    showToast(d.message || (d.ok ? 'OK' : 'Ошибка'), !d.ok);
+    setTimeout(loadStatus, 2000);
+  } catch (e) {
+    showToast('Ошибка: ' + e.message, true);
+  }
+}
+
+let statusTimer = null;
+let monitoredTimer = null;
+function setRefresh(sec) {
+  localStorage.setItem('refresh_sec', String(sec));
+  if (statusTimer) clearInterval(statusTimer);
+  if (sec > 0) statusTimer = setInterval(loadStatus, sec * 1000);
+}
+function refreshNow() {
+  loadStatus();
+  loadMonitored();
+  loadHistory();
+  loadMikrotik();
+  loadIpMapDevices();
+}
+
+// ============ MikroTik tiles — опрос каждые 30 сек ============
+let mtTimer = null;
+function _fmtKbps(kbps) {
+  if (kbps < 1) return '0';
+  if (kbps < 1024) return kbps.toFixed(1) + ' КБ/с';
+  return (kbps/1024).toFixed(1) + ' МБ/с';
+}
+function _fmtMb(mb) {
+  if (mb < 1024) return mb.toFixed(1) + ' МБ';
+  return (mb/1024).toFixed(2) + ' ГБ';
+}
+// ============ IP map (мини-версия для дашборда) ============
+let ipmapDevices = [];
+function _isOnlineDev(d) {
+  if (d.is_online === 1 || d.is_online === true) return true;
+  if (d.is_online === 0 || d.is_online === false) return false;
+  // Fallback: last_seen в пределах 3 мин
+  return d.last_seen && (Date.now()/1000 - d.last_seen) < 180;
+}
+async function loadIpMapDevices() {
+  try {
+    const r = await fetch('/api/network/devices');
+    const j = await r.json();
+    ipmapDevices = j.devices || [];
+    renderIpMap();
+  } catch (e) { /* ignore */ }
+}
+function renderIpMap() {
+  const card = document.getElementById('ipmap-card');
+  const grid = document.getElementById('ipmap-grid');
+  const sub  = document.getElementById('ipmap-subnet');
+  if (!card || !grid) return;
+  const filters = {
+    statOn:  document.getElementById('filt-stat-on') ?.checked ?? true,
+    statOff: document.getElementById('filt-stat-off')?.checked ?? true,
+    dynOn:   document.getElementById('filt-dyn-on')  ?.checked ?? true,
+    dynOff:  document.getElementById('filt-dyn-off') ?.checked ?? false,
+  };
+  let prefix = null;
+  const byLast = new Map();
+  for (const d of ipmapDevices) {
+    if (!d.ip) continue;
+    const m = d.ip.match(/^(\d+\.\d+\.\d+)\.(\d+)$/);
+    if (!m) continue;
+    prefix = m[1];
+    byLast.set(parseInt(m[2], 10), d);
+  }
+  if (!prefix) {
+    card.style.display = 'none';
+    return;
+  }
+  card.style.display = '';
+  sub.textContent = prefix + '.0/24';
+  const cells = [];
+  for (let i = 0; i < 256; i++) {
+    const d = byLast.get(i);
+    const isSelf = location.hostname.endsWith('.' + i);
+    let klass = 'ipmap-cell';
+    let title = prefix + '.' + i + ' · свободен';
+    let dotHtml = '';
+    let onclick = '';
+    let render = !!d;
+    if (d) {
+      const online = _isOnlineDev(d);
+      const isStatic  = d.dhcp_static === 1 || d.dhcp_static === true;
+      const isGateway = i === 1;
+      if (!isGateway && !isSelf) {
+        if (isStatic && online)  render = filters.statOn;
+        if (isStatic && !online) render = filters.statOff;
+        if (!isStatic && online) render = filters.dynOn;
+        if (!isStatic && !online)render = filters.dynOff;
+      }
+    }
+    if (render && d) {
+      const online = _isOnlineDev(d);
+      const isStatic  = d.dhcp_static === 1 || d.dhcp_static === true;
+      const isGateway = i === 1;
+      klass += isGateway ? ' t-gateway' : (isStatic ? ' t-static' : ' t-dynamic');
+      const name = d.name || d.hostname || d.vendor || '?';
+      const tags = [];
+      if (isGateway) tags.push('шлюз');
+      tags.push(isStatic ? 'static' : 'dynamic');
+      title = prefix + '.' + i + ' · ' + name + ' · ' + tags.join(', ') + ' · ' + (online ? 'онлайн' : 'офлайн');
+      dotHtml = '<span class="dot ' + (online ? 'on' : 'off') + '"></span>';
+      onclick = "location.href='/network'";
+    }
+    if (isSelf) klass += ' self';
+    cells.push('<div class="' + klass + '" title="' + escapeAttr(title) + '"' + (onclick ? ' onclick="' + onclick + '"' : '') + '>' + i + dotHtml + '</div>');
+  }
+  grid.innerHTML = cells.join('');
+}
+
+async function loadMikrotik() {
+  try {
+    const r = await fetch('/api/mikrotik/status');
+    const j = await r.json();
+    const row = document.getElementById('mt-row');
+    if (!j.configured) {
+      row.style.display = 'none';
+      return;
+    }
+    row.style.display = '';
+    if (!j.ok) {
+      document.getElementById('mt-cpu').textContent = '—';
+      document.getElementById('mt-cpu-sub').textContent = j.error || 'нет связи';
+      document.getElementById('mt-cpu-sub').style.color = 'var(--err)';
+      return;
+    }
+    // CPU
+    document.getElementById('mt-cpu').textContent = j.cpu_load + ' %';
+    document.getElementById('mt-cpu-sub').textContent =
+      j.cpu_count + ' ядра @ ' + j.cpu_freq_mhz + ' МГц · ' + j.arch;
+    document.getElementById('mt-cpu-sub').style.color = '';
+    document.getElementById('mt-cpu-meta').textContent = j.identity || '';
+    document.getElementById('mt-uptime-sub').textContent = 'uptime ' + (j.uptime || '—');
+    document.getElementById('mt-cpu-bar').style.width = j.cpu_load + '%';
+    document.getElementById('mt-cpu-bar').style.background = j.cpu_load > 80 ? 'var(--err)' : j.cpu_load > 50 ? 'var(--warn)' : 'var(--ok)';
+    // RAM
+    document.getElementById('mt-ram').textContent = j.mem.pct + ' %';
+    document.getElementById('mt-ram-sub').textContent =
+      _fmtMb(j.mem.used_mb) + ' / ' + _fmtMb(j.mem.total_mb);
+    document.getElementById('mt-ram-bar').style.width = j.mem.pct + '%';
+    document.getElementById('mt-ram-bar').style.background = j.mem.pct > 90 ? 'var(--err)' : j.mem.pct > 70 ? 'var(--warn)' : 'var(--ok)';
+    // Disk
+    document.getElementById('mt-disk').textContent = j.disk.pct + ' %';
+    document.getElementById('mt-disk-sub').textContent =
+      _fmtMb(j.disk.used_mb) + ' / ' + _fmtMb(j.disk.total_mb) + ' · ' + (j.version || '');
+    document.getElementById('mt-disk-bar').style.width = j.disk.pct + '%';
+    document.getElementById('mt-disk-bar').style.background = j.disk.pct > 90 ? 'var(--err)' : j.disk.pct > 70 ? 'var(--warn)' : 'var(--ok)';
+    // WAN
+    const w = j.wan || {};
+    document.getElementById('mt-wan').innerHTML =
+      '↓ ' + _fmtKbps(w.rx_kbps) + '<br>↑ ' + _fmtKbps(w.tx_kbps);
+    document.getElementById('mt-wan-sub').textContent =
+      'всего: ↓ ' + (w.rx_total_gb || 0).toFixed(1) + ' ГБ · ↑ ' + (w.tx_total_gb || 0).toFixed(1) + ' ГБ';
+    document.getElementById('mt-wan-iface').textContent = w.iface ? '· ' + w.iface : '';
+    const webfigBtn = document.getElementById('mt-webfig-btn');
+    if (webfigBtn) webfigBtn.onclick = () => window.open('http://' + (j.ip || location.hostname) + '/', '_blank');
+  } catch (e) {
+    // тихо игнорируем — плитка просто не обновится
+  }
+}
+function showArgonHelp() {
+  document.getElementById('argon-modal').classList.add('show');
+}
+function hideArgonHelp() {
+  document.getElementById('argon-modal').classList.remove('show');
+}
+function showAppHelp() {
+  document.getElementById('app-help-modal').classList.add('show');
+}
+function hideAppHelp() {
+  document.getElementById('app-help-modal').classList.remove('show');
+}
+
+// ============ VERSION UI ============
+let _versionInfo = null;
+
+async function versionLoad() {
+  try {
+    const j = await (await fetch('/api/version')).json();
+    _versionInfo = j;
+    document.getElementById('hdr-version').textContent = j.version;
+  } catch (e) { /* ignore */ }
+}
+
+function showVersionModal() {
+  document.getElementById('version-modal').classList.add('show');
+  versionRenderChangelog();
+  versionRefreshState();
+}
+function hideVersionModal() {
+  document.getElementById('version-modal').classList.remove('show');
+}
+
+async function versionRenderChangelog() {
+  try {
+    const j = await (await fetch('/api/changelog')).json();
+    if (!j.ok) {
+      document.getElementById('ver-changelog').innerHTML = '<span style="color:var(--err)">' + escapeHtml(j.error || 'ошибка') + '</span>';
+      return;
+    }
+    document.getElementById('ver-current-info').textContent = 'Текущая v' + j.version + ' · собрана ' + (_versionInfo?.release_date || '?');
+    document.getElementById('ver-changelog').innerHTML = renderMarkdown(j.markdown);
+  } catch (e) {
+    document.getElementById('ver-changelog').innerHTML = '<span style="color:var(--err)">сеть: ' + e.message + '</span>';
+  }
+}
+
+// Мини-renderer Markdown — заголовки, списки, inline `code`, bold, ссылки, абзацы
+function renderMarkdown(md) {
+  // Экранируем HTML
+  let html = md.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  // Заголовки
+  html = html.replace(/^### (.+)$/gm, '<h4 style="margin:14px 0 4px;font-size:13px;font-weight:600;color:var(--text)">$1</h4>');
+  html = html.replace(/^## \[?(.+?)\]?$/gm, '<h3 style="margin:18px 0 6px;font-size:15px;font-weight:600;color:var(--accent);border-top:1px solid var(--border);padding-top:10px">$1</h3>');
+  html = html.replace(/^# (.+)$/gm, '<h2 style="margin:0 0 8px;font-size:16px;font-weight:600">$1</h2>');
+  // Inline code
+  html = html.replace(/`([^`]+)`/g, '<code style="background:var(--bg-hover);padding:1px 5px;border-radius:3px;font-family:var(--mono);font-size:11.5px">$1</code>');
+  // Bold
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+  // Links [text](url)
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" style="color:var(--info);text-decoration:none">$1</a>');
+  // Списки -
+  html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+  // Группируем последовательные <li> в <ul>
+  html = html.replace(/(<li>.*?<\/li>\s*)+/gs, m => '<ul style="margin:4px 0;padding-left:22px">' + m + '</ul>');
+  // Двойные переводы строки → параграфы (но не внутри ul/h)
+  html = html.split(/\n\n+/).map(p => {
+    if (/^\s*<(h[2-6]|ul|li|p)/.test(p.trim())) return p;
+    return p.trim() ? '<p style="margin:6px 0;color:var(--text-muted)">' + p.trim().replace(/\n/g, ' ') + '</p>' : '';
+  }).join('\n');
+  return html;
+}
+
+async function versionRefreshState() {
+  try {
+    const j = await (await fetch('/api/update/state')).json();
+    _versionRenderUpdateBox(j);
+  } catch (e) {}
+}
+
+async function versionCheck() {
+  const btn = document.getElementById('ver-check-btn');
+  btn.disabled = true; btn.textContent = '⟳ проверяю…';
+  try {
+    const j = await (await fetch('/api/update/check')).json();
+    _versionRenderUpdateBox({last_check_result: j, last_check: Math.floor(Date.now()/1000)});
+  } catch (e) {
+    document.getElementById('ver-update-status').innerHTML = '<span style="color:var(--err)">сеть: ' + escapeHtml(e.message) + '</span>';
+  } finally {
+    btn.disabled = false; btn.textContent = '⟳ Проверить';
+  }
+}
+
+function _versionRenderUpdateBox(state) {
+  const r = state.last_check_result;
+  const statusEl = document.getElementById('ver-update-status');
+  const applyBtn = document.getElementById('ver-apply-btn');
+  const detEl = document.getElementById('ver-update-detail');
+  applyBtn.style.display = 'none';
+  if (!r) {
+    statusEl.textContent = 'Обновления ещё не проверялись';
+    return;
+  }
+  if (!r.ok) {
+    statusEl.innerHTML = '<span style="color:var(--err)">✗ ' + escapeHtml(r.error || 'ошибка') + '</span>';
+    return;
+  }
+  if (!r.has_update) {
+    statusEl.innerHTML = '<span style="color:var(--ok)">✓ Установлена последняя версия (' + escapeHtml(r.current_version) + ')</span>';
+  } else {
+    statusEl.innerHTML = '<b style="color:var(--warn)">↑ Доступна новая версия: ' + escapeHtml(r.latest_version) + '</b><br>'
+      + '<span style="font-size:11.5px;color:var(--text-dim)">установлена ' + escapeHtml(r.current_version) + '</span>';
+    applyBtn.style.display = '';
+  }
+  const checkAge = state.last_check ? Math.floor((Date.now()/1000 - state.last_check) / 60) : null;
+  if (checkAge != null) {
+    detEl.textContent = 'Последняя проверка ' + (checkAge < 1 ? 'только что' : checkAge + ' мин назад');
+  }
+  if (state.last_apply) {
+    const la = state.last_apply;
+    detEl.innerHTML += ' · последнее обновление: '
+      + (la.ok ? '✓' : '✗')
+      + ' ' + escapeHtml(la.from_version) + ' → ' + escapeHtml(la.to_version)
+      + ' (' + new Date(la.ts*1000).toLocaleString('ru-RU') + ')';
+  }
+}
+
+async function versionApply() {
+  if (!confirm('Скачать и применить обновление? Сервис рестартанёт через ~2 сек после применения.')) return;
+  const btn = document.getElementById('ver-apply-btn');
+  btn.disabled = true; btn.textContent = '⟳ обновление…';
+  try {
+    const r = await fetch('/api/update/apply', {method: 'POST'});
+    const j = await r.json();
+    if (j.ok) {
+      alert('✓ ' + j.message + '\n\nСтраница автоматически перезагрузится через 5 сек.');
+      setTimeout(() => location.reload(), 5000);
+    } else {
+      alert('✗ ' + (j.error || 'ошибка'));
+      btn.disabled = false; btn.textContent = '▼ Обновить';
+    }
+  } catch (e) {
+    alert('сеть: ' + e.message);
+    btn.disabled = false; btn.textContent = '▼ Обновить';
+  }
+}
+
+// ============ AUTH UI ============
+let _me = null;
+
+async function loadMe() {
+  try {
+    const j = await (await fetch('/api/auth/me')).json();
+    if (!j.authenticated) {
+      location.href = '/login?next=' + encodeURIComponent(location.pathname);
+      return;
+    }
+    _me = j;
+    document.getElementById('logout-user').textContent = j.username;
+    if (j.is_admin) {
+      const btn = document.getElementById('btn-users');
+      if (btn) btn.style.display = '';
+    }
+    // Принудительная смена пароля
+    if (j.must_change_password || sessionStorage.getItem('sc_force_pw_change') === '1') {
+      sessionStorage.removeItem('sc_force_pw_change');
+      showUsersModal();
+      usersSwitchTab('me');
+      setTimeout(() => {
+        const r = document.getElementById('me-pw-result');
+        if (r) {
+          r.innerHTML = '<span style="color:var(--warn)">⚠ Стандартный пароль admin/admin. Смени сейчас.</span>';
+          document.getElementById('me-pw-cur').focus();
+        }
+      }, 200);
+    }
+  } catch (e) {
+    location.href = '/login';
+  }
+}
+
+async function doLogout() {
+  if (!confirm('Выйти?')) return;
+  try { await fetch('/api/auth/logout', {method: 'POST'}); } catch (e) {}
+  location.href = '/login';
+}
+
+function showUsersModal() {
+  document.getElementById('users-modal').classList.add('show');
+  usersSwitchTab('users');
+}
+function hideUsersModal() {
+  document.getElementById('users-modal').classList.remove('show');
+}
+
+function usersSwitchTab(t) {
+  document.querySelectorAll('.users-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === t));
+  document.getElementById('pane-users').style.display = t === 'users' ? '' : 'none';
+  document.getElementById('pane-audit').style.display = t === 'audit' ? '' : 'none';
+  document.getElementById('pane-me').style.display    = t === 'me'    ? '' : 'none';
+  if (t === 'users') usersLoad();
+  if (t === 'audit') auditLoad();
+  if (t === 'me') {
+    document.getElementById('me-username').textContent = _me?.username || '—';
+    document.getElementById('me-role').textContent = _me?.is_admin ? '(админ)' : '(пользователь)';
+  }
+}
+
+async function usersLoad() {
+  try {
+    const j = await (await fetch('/api/auth/users')).json();
+    const tbody = document.getElementById('users-tbody');
+    if (!j.users || !j.users.length) {
+      tbody.innerHTML = '<tr><td colspan="6" style="color:var(--text-dim);padding:12px">нет пользователей</td></tr>';
+      return;
+    }
+    tbody.innerHTML = j.users.map(u => `
+      <tr>
+        <td>${u.id}</td>
+        <td><b>${escapeHtml(u.username)}</b></td>
+        <td>${u.is_admin ? '<span style="color:var(--warn)">admin</span>' : 'user'}</td>
+        <td style="color:var(--text-dim);font-size:11px">${u.created_at ? new Date(u.created_at*1000).toLocaleString('ru-RU') : '—'}</td>
+        <td style="color:var(--text-dim);font-size:11px">${u.last_login ? new Date(u.last_login*1000).toLocaleString('ru-RU') : 'никогда'}</td>
+        <td>
+          <button class="tile-btn" onclick="usersResetPw(${u.id}, '${escapeAttr(u.username)}')" title="Сбросить пароль">🔑</button>
+          ${u.username === _me?.username ? '<span style="color:var(--text-dim);font-size:11px;margin-left:6px">(вы)</span>' :
+           '<button class="tile-btn danger" onclick="usersDelete(' + u.id + ', \'' + escapeAttr(u.username) + '\')" title="Удалить">🗑</button>'}
+        </td>
+      </tr>`).join('');
+  } catch (e) {
+    document.getElementById('users-tbody').innerHTML = '<tr><td colspan="6" style="color:var(--err)">ошибка: ' + e.message + '</td></tr>';
+  }
+}
+
+async function usersCreate() {
+  const username = document.getElementById('add-user-name').value.trim();
+  const password = document.getElementById('add-user-pw').value;
+  const is_admin = document.getElementById('add-user-admin').checked;
+  if (!username || !password) return alert('Заполни логин и пароль');
+  try {
+    const r = await fetch('/api/auth/users', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({username, password, is_admin}),
+    });
+    const j = await r.json();
+    if (!j.ok) return alert(j.error || 'ошибка');
+    document.getElementById('add-user-name').value = '';
+    document.getElementById('add-user-pw').value = '';
+    document.getElementById('add-user-admin').checked = false;
+    usersLoad();
+  } catch (e) { alert('сеть: ' + e.message); }
+}
+
+async function usersDelete(uid, name) {
+  if (!confirm('Удалить пользователя «' + name + '» и все его сессии?')) return;
+  const r = await fetch('/api/auth/users/' + uid, {method: 'DELETE'});
+  const j = await r.json();
+  if (!j.ok) return alert(j.error || 'ошибка');
+  usersLoad();
+}
+
+async function usersResetPw(uid, name) {
+  const npw = prompt('Новый пароль для «' + name + '» (будет вынужден сменить при следующем входе):');
+  if (!npw) return;
+  if (npw.length < 4) return alert('Минимум 4 символа');
+  const r = await fetch('/api/auth/users/' + uid + '/password', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({new_password: npw}),
+  });
+  const j = await r.json();
+  alert(j.ok ? 'Пароль сменён' : (j.error || 'ошибка'));
+}
+
+async function meChangePassword() {
+  const cur = document.getElementById('me-pw-cur').value;
+  const npw = document.getElementById('me-pw-new').value;
+  const out = document.getElementById('me-pw-result');
+  if (!cur || !npw) { out.textContent = 'Заполни оба поля'; out.style.color = 'var(--err)'; return; }
+  try {
+    const r = await fetch('/api/auth/change-password', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({current_password: cur, new_password: npw}),
+    });
+    const j = await r.json();
+    if (j.ok) {
+      out.textContent = '✓ Пароль изменён';
+      out.style.color = 'var(--ok)';
+      document.getElementById('me-pw-cur').value = '';
+      document.getElementById('me-pw-new').value = '';
+    } else {
+      out.textContent = j.error || 'ошибка';
+      out.style.color = 'var(--err)';
+    }
+  } catch (e) {
+    out.textContent = 'сеть: ' + e.message;
+    out.style.color = 'var(--err)';
+  }
+}
+
+const _AUDIT_LABELS = {
+  login_success: '🟢 вход', login_failed: '🔴 ошибка входа', logout: '→ выход',
+  change_password: '🔑 смена пароля', create_user: '👤+ создание юзера',
+  delete_user: '👤🗑 удаление юзера', reset_user_password: '🔑 сброс пароля',
+  action_restart_iridium: '↻ restart iRidium', action_start_iridium: '▶ start iRidium',
+  action_stop_iridium: '◼ stop iRidium', action_restart_argononed: '↻ restart argononed',
+  action_reboot_pi: '⚠ reboot контроллера', action_shutdown_pi: '⊗ shutdown контроллера',
+  mikrotik_sync: '🔗 sync MikroTik', settings_iridium_changed: '⚙ настройки iRidium',
+  settings_mikrotik_changed: '⚙ настройки MikroTik',
+};
+
+async function auditLoad() {
+  const limit = document.getElementById('audit-limit').value || 200;
+  const user = document.getElementById('audit-filter-user').value.trim();
+  let url = '/api/auth/audit?limit=' + limit;
+  if (user) url += '&username=' + encodeURIComponent(user);
+  try {
+    const j = await (await fetch(url)).json();
+    const tbody = document.getElementById('audit-tbody');
+    if (!j.audit || !j.audit.length) {
+      tbody.innerHTML = '<tr><td colspan="6" style="color:var(--text-dim);padding:12px">нет записей</td></tr>';
+      return;
+    }
+    tbody.innerHTML = j.audit.map(r => {
+      const label = _AUDIT_LABELS[r.action] || r.action;
+      const cls = r.result === 'fail' ? 'audit-action-fail' : 'audit-action-success';
+      return `<tr>
+        <td style="color:var(--text-dim);font-family:var(--mono);font-size:11px;white-space:nowrap">${new Date(r.ts*1000).toLocaleString('ru-RU')}</td>
+        <td>${r.username ? escapeHtml(r.username) : '<span style="color:var(--text-dim)">—</span>'}</td>
+        <td style="color:var(--text-dim);font-family:var(--mono);font-size:11px">${escapeHtml(r.ip || '—')}</td>
+        <td class="${cls}">${escapeHtml(label)}</td>
+        <td style="color:var(--text-muted);font-size:11px;word-break:break-word">${escapeHtml(r.target || '')}</td>
+        <td>${r.result === 'fail' ? '<span style="color:var(--err)">✗</span>' : '<span style="color:var(--ok)">✓</span>'}</td>
+      </tr>`;
+    }).join('');
+  } catch (e) {
+    document.getElementById('audit-tbody').innerHTML = '<tr><td colspan="6" style="color:var(--err)">ошибка: ' + e.message + '</td></tr>';
+  }
+}
+
+function openLocalTerminal() {
+  const host = location.hostname || '127.0.0.1';
+  const url = 'http://' + host + ':8022/?hostname=' + encodeURIComponent(host) + '&port=22&username=pi';
+  window.open(url, 'webssh-local', 'width=1000,height=700');
+}
+async function showIridiumSettings() {
+  document.getElementById('iridium-settings-modal').classList.add('show');
+  try {
+    const r = await fetch('/api/iridium/settings');
+    const j = await r.json();
+    document.getElementById('iridium-user').value = j.username || 'admin';
+    document.getElementById('iridium-pw').placeholder = j.password_set ? '(пароль сохранён, введи новый чтобы сменить)' : 'пароль iRidium (как в веб-портале :8888)';
+    document.getElementById('iridium-test-result').textContent = j.configured ? '✓ настроено' : '';
+    document.getElementById('iridium-test-result').style.color = j.configured ? 'var(--ok)' : 'var(--text-muted)';
+  } catch (e) {}
+}
+function hideIridiumSettings() {
+  document.getElementById('iridium-settings-modal').classList.remove('show');
+}
+async function saveIridiumSettings() {
+  const user = document.getElementById('iridium-user').value || 'admin';
+  const pw = document.getElementById('iridium-pw').value;
+  const body = {username: user};
+  if (pw) body.password = pw;
+  const res = document.getElementById('iridium-test-result');
+  res.textContent = 'проверяем…'; res.style.color = 'var(--text-muted)';
+  try {
+    const r = await fetch('/api/iridium/settings', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    const t = (j && j.test) || {};
+    if (t.ok) {
+      res.textContent = '✓ авторизация прошла · ' + (t.devices?.count || '?') + ' устройств · ' + (t.tags?.count || '?') + ' тегов';
+      res.style.color = 'var(--ok)';
+      showToast('iRidium API подключён');
+      setTimeout(() => { hideIridiumSettings(); loadStatus(); }, 1500);
+    } else if (t.configured) {
+      res.textContent = '✗ ' + (t.error || 'не удалось войти — проверь пароль');
+      res.style.color = 'var(--err)';
+    } else {
+      res.textContent = 'не введён пароль';
+      res.style.color = 'var(--warn)';
+    }
+  } catch (e) {
+    res.textContent = 'ошибка сети: ' + e.message;
+    res.style.color = 'var(--err)';
+  }
+}
+
+function spark24h(arr) {
+  if (!arr || arr.length === 0) return '';
+  const w = arr.length * 2, h = 12;
+  const bars = arr.map((pct, i) => {
+    let color;
+    if (pct >= 99)      color = '#1D9E75';
+    else if (pct >= 50) color = '#EF9F27';
+    else if (pct >= 1)  color = '#E24B4A';
+    else                color = 'rgba(128,128,128,0.22)';
+    return '<rect x="' + (i*2) + '" y="0" width="2" height="' + h + '" fill="' + color + '"/>';
+  }).join('');
+  return '<svg class="spark-24h" viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" height="' + h + '"><title>24h присутствие</title>' + bars + '</svg>';
+}
+
+function fmtSinceDate(ts) {
+  if (!ts) return '—';
+  const dt = new Date(ts * 1000);
+  const today = new Date();
+  const sameDay = dt.getFullYear() === today.getFullYear()
+               && dt.getMonth() === today.getMonth()
+               && dt.getDate() === today.getDate();
+  const time = dt.toLocaleTimeString('ru-RU', {hour: '2-digit', minute: '2-digit'});
+  if (sameDay) return 'сегодня в ' + time;
+  const date = dt.toLocaleDateString('ru-RU', {day: '2-digit', month: '2-digit'});
+  return date + ' ' + time;
+}
+
+async function loadMonitored() {
+  try {
+    const r = await fetch('/api/network/monitored');
+    const j = await r.json();
+    const card = document.getElementById('monitored-card');
+    const grid = document.getElementById('monitored-grid');
+    let devs = j.devices || [];
+    if (devs.length === 0) { card.style.display = 'none'; return; }
+    // Sort: offline first (need attention), then by room, then by name
+    devs.sort((a, b) => {
+      if ((a.is_online ? 1 : 0) !== (b.is_online ? 1 : 0)) {
+        return (a.is_online ? 1 : 0) - (b.is_online ? 1 : 0);   // 0 (offline) before 1
+      }
+      const ra = (a.room || 'я').toLowerCase(), rb = (b.room || 'я').toLowerCase();
+      if (ra !== rb) return ra < rb ? -1 : 1;
+      const na = (a.name || a.hostname || '').toLowerCase(),
+            nb = (b.name || b.hostname || '').toLowerCase();
+      return na < nb ? -1 : na > nb ? 1 : 0;
+    });
+    card.style.display = '';
+    grid.innerHTML = devs.map(d => {
+      const online = d.is_online === 1;
+      const klass = online ? 'online' : 'offline';
+      const displayName = d.name || d.hostname || (d.ip || 'без имени');
+      const sub = [d.room, d.vendor].filter(Boolean).join(' · ');
+      const statusColor = online ? 'var(--ok)' : 'var(--err)';
+      const statusVerb  = online ? 'онлайн с' : 'офлайн с';
+      const urlLink = d.url ? '<a href="' + escapeAttr(d.url) + '" target="_blank" style="color:var(--accent);text-decoration:none;margin-left:4px">↗</a>' : '';
+      return `<div class="monitored-tile ${klass}">
+        <p class="name" title="${escapeAttr(displayName)}">${escapeHtml(displayName)}${urlLink}</p>
+        <p class="sub">${escapeHtml(sub || d.ip || '')}</p>
+        ${spark24h(d.timeline_24h)}
+        <div class="status-line">
+          <span style="color:${statusColor}">● ${statusVerb} ${fmtSinceDate(d.status_since)}</span>
+          <span style="color:var(--text-dim)">${escapeHtml(d.ip || '')}</span>
+        </div>
+      </div>`;
+    }).join('');
+    checkOfflineAlerts(devs);
+  } catch (e) {}
+}
+
+// ============ Tile criticality coloring ============
+function setCardCrit(elemId, level) {
+  // level: 'ok' | 'warn' | 'err'
+  const card = document.getElementById(elemId);
+  if (!card) return;
+  const tile = card.closest('.card');
+  if (!tile) return;
+  tile.classList.remove('crit-warn', 'crit-err');
+  if (level === 'warn') tile.classList.add('crit-warn');
+  else if (level === 'err') tile.classList.add('crit-err');
+}
+
+function escapeAttr(s) {
+  return (s == null ? '' : String(s)).replace(/"/g, '&quot;');
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+  // Read-only mode for /client URL — hides admin buttons via CSS.
+  if (location.pathname.indexOf('/client') === 0) {
+    document.body.classList.add('readonly');
+  }
+  // Apply saved theme
+  applyTheme(localStorage.getItem('theme') || 'auto');
+  // Show notifications-enable button if API exists and not granted
+  if ('Notification' in window && Notification.permission === 'default') {
+    document.getElementById('btn-notif').style.display = '';
+  }
+  // Register service worker for PWA install + offline shell
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  }
+
+  makeCharts();
+  loadStatus();
+  loadHistory();
+  loadMonitored();
+  const saved = parseInt(localStorage.getItem('refresh_sec') || '5', 10);
+  const sel = document.getElementById('refresh-sel');
+  if (sel) sel.value = String(saved);
+  setRefresh(saved);
+  setInterval(loadHistory, 60000);
+  monitoredTimer = setInterval(loadMonitored, 30000);
+  loadMikrotik();
+  loadMtHistory();
+  mtTimer = setInterval(() => { loadMikrotik(); loadMtHistory(); }, 30000);
+  loadIpMapDevices();
+  setInterval(loadIpMapDevices, 30000);
+  loadMe();
+  versionLoad();
+});
+</script>
+</body>
+</html>
