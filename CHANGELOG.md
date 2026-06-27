@@ -2,6 +2,34 @@
 
 Все значимые изменения проекта. Формат — Keep a Changelog + SemVer.
 
+## 1.1.0 — 2026-06-27
+
+Обратная совместимость (Task #5). Старые порталы больше не ломаются — либо graceful upgrade, либо принудительный force-reload через UI-баннер.
+
+### Added — Schema migrations framework
+- Таблица `schema_migrations(version, applied_at, description)` — формальное отслеживание applied миграций
+- `MIGRATIONS` list в `network.py` — упорядоченный список миграций для будущих schema changes
+- `apply_pending_migrations()` — auto-apply при старте + SQLite-safe backup до выполнения (через `backup()` API)
+- v0 baseline — все pre-1.0.0 ad-hoc CREATE/ALTER маркируются как уже применённые
+- Endpoint `GET /api/version` теперь возвращает `schema.{current, target, up_to_date, applied}`
+
+### Added — Client compatibility check
+- `MIN_COMPATIBLE_CLIENT` константа в `dashboard.py` — минимальная версия PWA-клиента с которой backend ещё совместим
+- `/api/version` возвращает поле `min_compatible_client`
+- Frontend: periodic polling `/api/version` каждые 60 сек
+- Сценарии:
+  - Backend обновился без breaking changes → жёлтый toast «Backend обновился до v1.x, обновите страницу» с кнопками «Обновить» / «Позже»
+  - Client старше `min_compatible_client` → **force hard-reload** автоматически (unregister SW + clear caches + reload)
+
+### Added — Service Worker invalidation
+- Bumped `CACHE = sc-v4 → sc-v5` — старые browser caches принудительно сбрасываются на каждом MINOR-релизе
+- При force-reload клиент сам unregister'ит все SW и очищает все Cache Storage entries
+
+### Why
+- Без migration framework каждое schema-изменение = риск потери данных при upgrade на много контроллеров
+- Без client-side version check — старый закешированный PWA пытался читать новый /api/status и крашился на missing полях
+- Force-reload гарантирует консистентность: либо клиент совместим, либо обновился — третьего нет
+
 ## 1.0.0 — 2026-06-27
 
 Первый публичный релиз. Версионирование + GitHub + автообновление.

@@ -43,6 +43,108 @@ DEFAULT_TYPES = [
 ]
 
 
+# ============ SCHEMA MIGRATIONS ============
+# Versioned migrations: каждое future schema-изменение добавляется как (N, desc, fn).
+# v0 — baseline (всё что было до миграционной системы — ad-hoc CREATE TABLE IF NOT EXISTS
+# и ALTER TABLE ... ADD COLUMN if-not-exists в init_db). Новые миграции
+# применяются по порядку с pre-migration backup.
+
+# Список миграций. Format: (version, description, callable_taking_cursor)
+# v1+ применяется поверх baseline init_db (где созданы все pre-1.0.0 таблицы).
+MIGRATIONS = [
+    # Пример будущей миграции:
+    # (1, "add column foo to bar", lambda c: c.execute("ALTER TABLE bar ADD COLUMN foo TEXT")),
+]
+
+# Auto-computed: max version из MIGRATIONS или 0 если пуст.
+CURRENT_SCHEMA_VERSION = max((v for v, _, _ in MIGRATIONS), default=0)
+
+
+def _backup_db_pre_migration(from_v, to_v):
+    """Снимок БД ДО применения миграций — на случай если что-то пойдёт не так."""
+    import shutil
+    if not DB_PATH.exists():
+        return None
+    backup_dir = DB_PATH.parent / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    dst = backup_dir / f"inventory.pre-migration-v{from_v}-to-v{to_v}-{int(time.time())}.db"
+    try:
+        # SQLite-safe бекап через backup API (а не cp — БД может быть открыта)
+        with sqlite3.connect(str(DB_PATH)) as src, sqlite3.connect(str(dst)) as dst_con:
+            src.backup(dst_con)
+        print(f"[migrate] backup: {dst}")
+        return dst
+    except Exception as e:
+        print(f"[migrate] backup FAILED: {e}")
+        return None
+
+
+def apply_pending_migrations():
+    """Применить недостающие миграции из MIGRATIONS list. Откат при фейле.
+    Должна вызываться ПОСЛЕ init_db (она создаёт baseline)."""
+    with db() as c:
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at INTEGER NOT NULL,
+                description TEXT
+            )
+        """)
+        # Если впервые — отмечаем v0 baseline как «применено»
+        # (всё что init_db создал ad-hoc — это v0).
+        c.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version, applied_at, description) "
+            "VALUES (0, ?, 'baseline — все pre-1.0.0 schema изменения')",
+            (int(time.time()),)
+        )
+        current = c.execute(
+            "SELECT MAX(version) FROM schema_migrations"
+        ).fetchone()[0] or 0
+
+    pending = [(v, d, fn) for v, d, fn in MIGRATIONS if v > current]
+    if not pending:
+        return
+
+    target = max(v for v, _, _ in pending)
+    print(f"[migrate] pending: v{current} → v{target} ({len(pending)} миграций)")
+    backup_path = _backup_db_pre_migration(current, target)
+
+    for v, desc, migrate_fn in pending:
+        try:
+            with db() as c:
+                migrate_fn(c)
+                c.execute(
+                    "INSERT INTO schema_migrations (version, applied_at, description) "
+                    "VALUES (?, ?, ?)",
+                    (v, int(time.time()), desc)
+                )
+            print(f"[migrate] ✓ v{v}: {desc}")
+        except Exception as e:
+            print(f"[migrate] ✗ ПРОВАЛ v{v}: {e}")
+            if backup_path:
+                print(f"[migrate] восстановите вручную: cp {backup_path} {DB_PATH}")
+            raise   # systemd увидит exit code и не запустит сервис со сломанной БД
+
+
+def get_schema_state():
+    """Для /api/version: текущая версия схемы + применённые миграции."""
+    try:
+        with db() as c:
+            c.execute("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER, description TEXT)")
+            current = c.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] or 0
+            applied = c.execute(
+                "SELECT version, applied_at, description FROM schema_migrations ORDER BY version"
+            ).fetchall()
+        return {
+            "current": current,
+            "target": CURRENT_SCHEMA_VERSION,
+            "up_to_date": current >= CURRENT_SCHEMA_VERSION,
+            "applied": [dict(r) for r in applied],
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
 def init_db():
     with db() as c:
         c.executescript("""
@@ -238,6 +340,7 @@ def init_db():
 
 
 init_db()
+apply_pending_migrations()
 
 
 def setting_get(key, default=None):

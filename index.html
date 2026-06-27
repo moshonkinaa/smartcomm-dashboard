@@ -1687,15 +1687,78 @@ function hideAppHelp() {
   document.getElementById('app-help-modal').classList.remove('show');
 }
 
-// ============ VERSION UI ============
+// ============ VERSION UI + COMPATIBILITY CHECK ============
 let _versionInfo = null;
+let _clientLoadedVersion = null;   // версия с которой загрузилась эта вкладка
+let _updateToastShown = false;
 
 async function versionLoad() {
   try {
-    const j = await (await fetch('/api/version')).json();
+    const j = await (await fetch('/api/version', {cache: 'no-store'})).json();
     _versionInfo = j;
+    if (_clientLoadedVersion === null) {
+      _clientLoadedVersion = j.version;
+    }
     document.getElementById('hdr-version').textContent = j.version;
+    _checkCompat(j);
   } catch (e) { /* ignore */ }
+}
+
+function _checkCompat(j) {
+  if (!j || !_clientLoadedVersion) return;
+  // 1. Backend обновился — клиент стал устаревшим
+  if (j.version !== _clientLoadedVersion) {
+    if (!_updateToastShown) showVersionMismatchToast(j.version);
+    return;
+  }
+  // 2. Backend заявляет «min_compatible_client» выше нашей версии — force reload
+  const cmp = _semverCmp(_clientLoadedVersion, j.min_compatible_client || "0.0.0");
+  if (cmp < 0) {
+    // Несовместимы → принудительный hard refresh
+    console.warn("[compat] Client version", _clientLoadedVersion,
+                 "< min_compatible", j.min_compatible_client, "— force reload");
+    _hardReload();
+  }
+}
+
+function _semverCmp(a, b) {
+  const aa = a.split('.').map(n => parseInt(n, 10) || 0);
+  const bb = b.split('.').map(n => parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i++) {
+    if (aa[i] < bb[i]) return -1;
+    if (aa[i] > bb[i]) return 1;
+  }
+  return 0;
+}
+
+async function _hardReload() {
+  // Полная зачистка: unregister SW + caches + reload
+  try {
+    if ('serviceWorker' in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      for (const r of regs) await r.unregister();
+    }
+    if ('caches' in window) {
+      const keys = await caches.keys();
+      for (const k of keys) await caches.delete(k);
+    }
+  } catch (e) { /* best-effort */ }
+  // Reload с обходом disk-cache
+  location.reload();
+}
+
+function showVersionMismatchToast(newVersion) {
+  _updateToastShown = true;
+  const t = document.createElement('div');
+  t.id = 'version-mismatch-toast';
+  t.style.cssText = 'position:fixed;top:0;left:0;right:0;background:var(--warn);color:#000;padding:12px 20px;display:flex;align-items:center;justify-content:space-between;z-index:9999;box-shadow:0 2px 10px rgba(0,0,0,0.2);font-size:13px;flex-wrap:wrap;gap:10px';
+  t.innerHTML =
+    '<span><b>⚠ Backend обновился до v' + escapeHtml(newVersion) + '</b> · '
+    + 'у вас в браузере v' + escapeHtml(_clientLoadedVersion) + '. '
+    + 'Обновите страницу, чтобы не было несовместимостей.</span>'
+    + '<button onclick="_hardReload()" style="background:#000;color:#fff;border:none;padding:6px 14px;border-radius:6px;font-weight:500;cursor:pointer">Обновить страницу</button>'
+    + '<button onclick="this.parentElement.remove()" style="background:transparent;border:1px solid #000;color:#000;padding:6px 10px;border-radius:6px;cursor:pointer">Позже</button>';
+  document.body.appendChild(t);
 }
 
 function showVersionModal() {
@@ -2183,6 +2246,8 @@ window.addEventListener('DOMContentLoaded', () => {
   setInterval(loadIpMapDevices, 30000);
   loadMe();
   versionLoad();
+  // Periodic version check — если backend обновился, покажем toast «обнови страницу»
+  setInterval(versionLoad, 60000);
 });
 </script>
 </body>

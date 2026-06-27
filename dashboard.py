@@ -102,9 +102,13 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 RELEASE_DATE = "2026-06-27"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
+# Минимальная версия клиента (PWA/cache) с которой backend ещё совместим.
+# Если HTML/JS клиента старше — попросим hard refresh. Обычно = текущая VERSION,
+# но если изменения косметические/back-compat — можно занизить.
+MIN_COMPATIBLE_CLIENT = "1.0.0"
 
 app = Flask(__name__)
 
@@ -1646,6 +1650,8 @@ def api_version():
         "release_date": RELEASE_DATE,
         "repo": GITHUB_REPO,
         "channel": "stable",
+        "min_compatible_client": MIN_COMPATIBLE_CLIENT,
+        "schema": network_bp.get_schema_state(),
     })
 
 
