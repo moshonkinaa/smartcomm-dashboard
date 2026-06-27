@@ -145,6 +145,20 @@
   .pill.err { background: rgba(226,75,74,0.13); color: var(--err); border-color: rgba(226,75,74,0.3); }
   .conn-list { font-family: var(--mono); font-size: 11px; line-height: 1.6; color: var(--text-muted); max-height: 150px; overflow-y: auto; }
   .users-tab { padding: 5px 12px; font: inherit; font-size: 11.5px; font-weight: 500; border: 1px solid var(--border); background: var(--bg-inner); color: var(--text-muted); cursor: pointer; border-radius: 6px; }
+  /* Help-модалки: collapsible sections */
+  .help-sect { border-bottom: 1px solid var(--border); padding: 4px 0; }
+  .help-sect:last-of-type { border-bottom: none; }
+  .help-sect > summary { font-size: 13.5px; font-weight: 500; padding: 8px 4px; cursor: pointer; user-select: none; list-style: none; display: flex; align-items: center; gap: 6px; transition: color 0.12s; -webkit-tap-highlight-color: transparent; }
+  .help-sect > summary::-webkit-details-marker { display: none; }
+  .help-sect > summary::before { content: '▸'; font-size: 11px; color: var(--text-dim); transition: transform 0.15s; display: inline-block; width: 12px; }
+  .help-sect[open] > summary::before { transform: rotate(90deg); color: var(--accent); }
+  .help-sect > summary:hover { color: var(--accent); }
+  .help-sect > p, .help-sect > ul { font-size: 12.5px; line-height: 1.55; color: var(--text); padding: 0 0 8px 22px; margin: 4px 0; }
+  .help-sect > ul { padding-left: 38px; }
+  .help-sect > ul li { margin: 3px 0; }
+  /* Унифицированная кнопка "Закрыть" в модалках */
+  .btn-close { padding: 8px 18px; font: inherit; font-size: 13px; font-weight: 500; color: var(--text); background: transparent; border: 1px solid var(--border); border-radius: 9px; cursor: pointer; transition: background 0.15s; -webkit-tap-highlight-color: transparent; }
+  .btn-close:hover { background: var(--bg-hover); }
   .users-tab.active { background: var(--accent); color: white; border-color: var(--accent); }
   #users-tbody td, #audit-tbody td { padding: 6px 4px; border-bottom: 1px solid var(--border); }
   #users-tbody tr:hover, #audit-tbody tr:hover { background: var(--bg-hover); }
@@ -327,13 +341,13 @@
 
   <div class="grid grid-4">
     <div class="card">
-      <p class="card-title">Pi · Температура CPU</p>
+      <p class="card-title">Контроллер ·Температура CPU</p>
       <p class="card-value" id="temp">—</p>
       <p class="card-sub" id="temp-sub">—</p>
       <div class="spark" id="spark-temp"></div>
     </div>
     <div class="card">
-      <p class="card-title">Pi · CPU</p>
+      <p class="card-title">Контроллер ·CPU</p>
       <p class="card-value" id="cpu">—</p>
       <p class="card-sub" id="cpu-sub">—</p>
       <div class="bar"><div class="bar-fill" id="cpu-bar"></div></div>
@@ -341,14 +355,14 @@
       <div class="spark" id="spark-cpu"></div>
     </div>
     <div class="card">
-      <p class="card-title">Pi · RAM</p>
+      <p class="card-title">Контроллер ·RAM</p>
       <p class="card-value" id="mem">—</p>
       <p class="card-sub" id="mem-sub">—</p>
       <div class="bar"><div class="bar-fill" id="mem-bar"></div></div>
       <div class="spark" id="spark-ram"></div>
     </div>
     <div class="card">
-      <p class="card-title">Pi · Диск /</p>
+      <p class="card-title">Контроллер ·Диск /</p>
       <p class="card-value" id="disk">—</p>
       <p class="card-sub" id="disk-sub">—</p>
       <div class="bar"><div class="bar-fill" id="disk-bar"></div></div>
@@ -416,7 +430,7 @@
       </div>
     </div>
     <div class="card">
-      <p class="card-title">Pi uptime</p>
+      <p class="card-title">Uptime контроллера</p>
       <p class="card-value" id="pi-uptime">—</p>
       <p class="card-sub" id="pi-sub">—</p>
       <div class="tile-actions">
@@ -435,7 +449,7 @@
       </div>
     </div>
     <div class="card">
-      <p class="card-title">Pi · Сеть eth0</p>
+      <p class="card-title">Контроллер ·Сеть eth0</p>
       <p class="card-value" id="net">—</p>
       <p class="card-sub" id="net-sub">—</p>
       <div class="spark" id="spark-net"></div>
@@ -464,7 +478,7 @@
 
   <div class="grid grid-2">
     <div class="card">
-      <p class="panel-title">Pi · Температура CPU · <span id="range-label-1">последний час</span>
+      <p class="panel-title">Контроллер ·Температура CPU · <span id="range-label-1">последний час</span>
         <span class="range-toggle">
           <button class="active" data-range="1h" onclick="setRange('1h')">1 ч</button>
           <button data-range="24h" onclick="setRange('24h')">24 ч</button>
@@ -473,7 +487,7 @@
       <div class="chart-wrap"><canvas id="chart-temp"></canvas></div>
     </div>
     <div class="card">
-      <p class="panel-title">Pi · Нагрузка CPU · <span id="range-label-2">последний час</span>
+      <p class="panel-title">Контроллер ·Нагрузка CPU · <span id="range-label-2">последний час</span>
         <span class="range-toggle">
           <button class="active" data-range="1h" onclick="setRange('1h')">1 ч</button>
           <button data-range="24h" onclick="setRange('24h')">24 ч</button>
@@ -580,7 +594,7 @@
       <div id="iridium-test-result" style="font-size:12px;min-height:18px"></div>
     </div>
     <div style="display:flex;justify-content:flex-end;gap:8px">
-      <button class="btn-action" style="color:var(--text);border-color:var(--border)" onclick="hideIridiumSettings()">Отмена</button>
+      <button class="btn-close" onclick="hideIridiumSettings()">Отмена</button>
       <button class="btn-action c-blue" onclick="saveIridiumSettings()">Сохранить и проверить</button>
     </div>
   </div>
@@ -612,7 +626,7 @@
 
     <div style="display:flex;justify-content:space-between;align-items:center;margin-top:18px;gap:10px">
       <a id="ver-github-link" href="https://github.com/moshonkinaa/smartcomm-dashboard" target="_blank" style="color:var(--info);font-size:12px;text-decoration:none">→ GitHub repository</a>
-      <button class="btn-action" style="color:var(--text);border-color:var(--border)" onclick="hideVersionModal()">Закрыть</button>
+      <button class="btn-close" onclick="hideVersionModal()">Закрыть</button>
     </div>
   </div>
 </div>
@@ -690,7 +704,7 @@
     </div>
 
     <div style="display:flex;justify-content:flex-end;margin-top:18px">
-      <button class="btn-action" style="color:var(--text);border-color:var(--border)" onclick="hideUsersModal()">Закрыть</button>
+      <button class="btn-close" onclick="hideUsersModal()">Закрыть</button>
     </div>
   </div>
 </div>
@@ -699,74 +713,80 @@
 <div class="modal-backdrop" id="app-help-modal" onclick="if(event.target===this)hideAppHelp()">
   <div class="modal-box" style="max-width: 720px">
     <h2 style="margin:0 0 6px;font-size:19px;font-weight:500">Монитор SmartComm — что есть</h2>
-    <p style="margin:0 0 16px;font-size:12.5px;color:var(--text-muted)">Локальный диагностический портал контроллера умного дома. Все данные собираются на самом контроллере и хранятся локально (без облака).</p>
+    <p style="margin:0 0 14px;font-size:12.5px;color:var(--text-muted)">Локальный диагностический портал контроллера умного дома. Все данные собираются на самом контроллере и хранятся локально (без облака). Кликни на раздел чтобы раскрыть.</p>
 
-    <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">📊 Метрики контроллера (1-й ряд)</h3>
-    <ul style="font-size:12.5px;line-height:1.6;color:var(--text);padding-left:20px;margin:0">
-      <li><b>Температура CPU</b> — текущая + спарклайн за час. Цвет: <span style="color:var(--ok)">&lt;60°C ОК</span>, <span style="color:var(--warn)">60-75 предупреждение</span>, <span style="color:var(--err)">&gt;75 критично</span>. При высоких порогах плитка получает цветную рамку.</li>
-      <li><b>CPU</b> — общая нагрузка %, частота, LoadAvg, мини-полоски по ядрам, спарклайн.</li>
-      <li><b>RAM / Диск /</b> — % использования с полосой и спарклайном.</li>
-    </ul>
+    <details class="help-sect" open><summary>📊 Метрики контроллера (1-й ряд)</summary>
+      <ul>
+        <li><b>Температура CPU</b> — текущая + спарклайн за час. Цвет: <span style="color:var(--ok)">&lt;60°C</span>, <span style="color:var(--warn)">60-75</span>, <span style="color:var(--err)">&gt;75 критично</span>. При перегреве плитка получает цветную рамку.</li>
+        <li><b>CPU</b> — общая нагрузка %, частота, LoadAvg, мини-полоски по ядрам.</li>
+        <li><b>RAM / Диск /</b> — % использования с полосой и спарклайном.</li>
+      </ul>
+    </details>
 
-    <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">📡 Метрики MikroTik (2-й ряд, если настроен)</h3>
-    <ul style="font-size:12.5px;line-height:1.6;color:var(--text);padding-left:20px;margin:0">
-      <li><b>MikroTik · CPU</b> — load %, частота, ядра, аптайм MikroTik.</li>
-      <li><b>MikroTik · RAM / Диск</b> — % + использовано/всего + версия RouterOS.</li>
-      <li><b>MikroTik · WAN</b> — текущая скорость загрузки/отдачи через интерфейс с default-route, общий трафик за всё время. Кнопка <b>WebFig</b> открывает веб-интерфейс MikroTik.</li>
-    </ul>
+    <details class="help-sect"><summary>📡 Метрики MikroTik (2-й ряд, если настроен)</summary>
+      <ul>
+        <li><b>CPU</b> — load %, частота, ядра, аптайм MikroTik.</li>
+        <li><b>RAM / Диск</b> — % + использовано/всего + версия RouterOS.</li>
+        <li><b>WAN</b> — скорость загрузки/отдачи через интерфейс с default-route, общий трафик. Кнопка <b>WebFig</b> открывает веб-интерфейс MikroTik.</li>
+      </ul>
+    </details>
 
-    <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">🎛 Управление (3-й ряд)</h3>
-    <ul style="font-size:12.5px;line-height:1.6;color:var(--text);padding-left:20px;margin:0">
-      <li><b>iRidium сервис</b> — статус (активен/мёртв), PID, время запуска. Кнопки <b>Портал :8888</b> и <b>Рестарт</b>.</li>
-      <li><b>Pi uptime</b> — сколько контроллер работает. Кнопки <b>🖥 Терминал</b> (SSH в браузере через WebSSH на :8022), <b>Reboot</b>, <b>Shutdown</b>.</li>
-      <li><b>Сеть eth0</b> — скорости и спарклайн трафика контроллера.</li>
-      <li><b>iRidium · детали</b> — версия билда, имя проекта из .irpz, RAM/потоки процесса, размер БД, число подключённых клиентов. Ссылка <b>⚙ API</b> — настройка пароля iRidium для расширенной интеграции.</li>
-    </ul>
+    <details class="help-sect"><summary>🎛 Управление (3-й ряд)</summary>
+      <ul>
+        <li><b>iRidium сервис</b> — статус (активен/загрузка/мёртв), PID, время запуска. Кнопки <b>Портал</b>, <b>Рестарт</b>, <b>Старт/Стоп</b>.</li>
+        <li><b>Uptime контроллера</b> — кнопки <b>🖥 Терминал</b> (WebSSH на :8022), <b>Reboot</b>, <b>Shutdown</b>.</li>
+        <li><b>Сеть eth0</b> — скорости и спарклайн трафика контроллера.</li>
+        <li><b>iRidium · детали</b> — версия билда, имя проекта из .irpz, RAM/потоки, размер БД, число подключённых клиентов. Ссылка <b>⚙ API</b> — настройка пароля iRidium.</li>
+      </ul>
+    </details>
 
-    <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">📡 Мониторинг устройств</h3>
-    <p style="font-size:12.5px;line-height:1.5;margin:0">Плитка появляется если в Карте сети какие-то устройства отмечены галочкой «Показывать на дашборде». У каждого — 24-часовая полоска доступности и подпись «онлайн с DD.MM HH:MM». Офлайн сверху для удобства.</p>
+    <details class="help-sect"><summary>📡 Мониторинг устройств</summary>
+      <p>Плитка появляется если в Карте сети какие-то устройства отмечены галочкой «Показывать на дашборде». У каждого — 24-часовая полоска доступности и подпись «онлайн с DD.MM HH:MM». Офлайн сверху для удобства.</p>
+    </details>
 
-    <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">📈 Большие графики</h3>
-    <ul style="font-size:12.5px;line-height:1.6;padding-left:20px;margin:0">
-      <li><b>Температура CPU контроллера</b> + <b>Нагрузка CPU</b> — переключатель <b>1 ч / 24 ч</b>.</li>
-      <li><b>MikroTik · CPU</b> + <b>MikroTik · WAN трафик</b> (↓ download / ↑ upload в одном графике) — отдельный переключатель 1 ч / 24 ч.</li>
-      <li>История сохраняется в SQLite (<code>/var/lib/smartcomm-dashboard/metrics.db</code>) и переживает рестарты дашборда. Хранится 30 дней.</li>
-    </ul>
+    <details class="help-sect"><summary>📈 Большие графики</summary>
+      <ul>
+        <li><b>Температура CPU контроллера</b> + <b>Нагрузка CPU</b> — переключатель <b>1 ч / 24 ч</b>.</li>
+        <li><b>MikroTik · CPU</b> + <b>MikroTik · WAN трафик</b> (↓ download / ↑ upload в одном графике).</li>
+        <li>История в SQLite <code>/var/lib/smartcomm-dashboard/metrics.db</code>, переживает рестарты. 30 дней retention.</li>
+      </ul>
+    </details>
 
-    <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">⚙️ Состояние системы</h3>
-    <p style="font-size:12.5px;line-height:1.5;margin:0">Здоровье-проверки: NTP синхронизация, упавшие systemd-юниты, нужен ли ребут, доступные apt-обновления (раз в 6 ч), последние ошибки dmesg, SD-карта (модель/дата), throttle история (был ли undervolt/перегрев).</p>
+    <details class="help-sect"><summary>⚙️ Состояние системы (health-checks)</summary>
+      <p>NTP синхронизация · упавшие systemd-юниты · нужен ли ребут · доступные apt-обновления (раз в 6 ч) · последние ошибки dmesg · SD-карта · throttle история (был ли undervolt/перегрев).</p>
+    </details>
 
-    <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">📋 Журналы и подключения</h3>
-    <p style="font-size:12.5px;line-height:1.5;margin:0">Топ-5 процессов по CPU и RAM. Активные TCP-подключения iRidium. Отдельная плитка «iRidium · все данные API» (лицензия, проект, список устройств/тегов из <code>:8888/rest/...</code>). 50 последних строк журнала iRidium (новые сверху, цветной индикатор свежести).</p>
+    <details class="help-sect"><summary>📋 Журналы и подключения iRidium</summary>
+      <p>Топ-5 процессов по CPU и RAM. Активные TCP-подключения iRidium. Отдельная плитка «iRidium · все данные API» (лицензия, проект, устройства/теги из <code>:8888/rest/...</code>). 50 последних строк журнала iRidium (новые сверху, цветной индикатор свежести).</p>
+    </details>
 
-    <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">🗺 Карта IP (в самом низу)</h3>
-    <p style="font-size:12.5px;line-height:1.5;margin:0">Дубль карты сети с <a href="/network" style="color:var(--info)">/network</a> для быстрого взгляда: 16×16 ячеек = вся подсеть /24.</p>
-    <ul style="font-size:12.5px;line-height:1.6;padding-left:20px;margin:4px 0 0">
-      <li><b>Фон ячейки = тип адреса</b>: <span style="color:var(--ok)">зелёный</span> = static (DHCP-резервация в MikroTik), <span style="color:#BA7517">жёлтый</span> = dynamic, <span style="color:#A66C35">коричневый</span> = шлюз (<code>.1</code>), <span style="color:#3FB0CC">голубой</span> = этот контроллер, белый = свободен.</li>
-      <li><b>Точка снизу-справа = статус</b>: <span style="color:#1D9E75">зелёная</span> онлайн, <span style="color:#E24B4A">красная</span> офлайн.</li>
-      <li><b>4 чекбокса-фильтра</b>: static·online / static·offline / dynamic·online / dynamic·offline. Можно произвольно мешать. По умолчанию выключен только dynamic·offline — чтобы не показывать временно выключенные DHCP-арендаторы.</li>
-      <li>Шлюз <code>.1</code> и этот контроллер видны всегда независимо от фильтров.</li>
-      <li>Клик по любой ячейке → переход на /network.</li>
-    </ul>
+    <details class="help-sect"><summary>🗺 Карта IP (в самом низу)</summary>
+      <p>Дубль карты сети с <a href="/network" style="color:var(--info)">/network</a>: 16×16 ячеек = вся подсеть /24.</p>
+      <ul>
+        <li><b>Фон ячейки = тип адреса</b>: <span style="color:var(--ok)">зелёный</span> static, <span style="color:#BA7517">жёлтый</span> dynamic, <span style="color:#A66C35">коричневый</span> шлюз <code>.1</code>, <span style="color:#3FB0CC">голубой</span> = этот контроллер.</li>
+        <li><b>Точка справа-снизу = статус</b>: <span style="color:#1D9E75">зелёная</span> online, <span style="color:#E24B4A">красная</span> offline.</li>
+        <li><b>4 чекбокса-фильтра</b>: static·on/off, dynamic·on/off. По умолчанию выключен dynamic·offline (давно отключённые устройства).</li>
+        <li>Шлюз и этот контроллер видны всегда независимо от фильтров. Клик → /network.</li>
+      </ul>
+    </details>
 
-    <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">🎛 Управление в шапке</h3>
-    <ul style="font-size:12.5px;line-height:1.6;padding-left:20px;margin:0">
-      <li><b>Карта сети</b> — открыть страницу инвентаря устройств</li>
-      <li><b>Кнопка Argon</b> — справочник по поведению кнопки на корпусе (показывается только на Pi с Argon ONE V3)</li>
-      <li>Селектор <b>каждые 1/5/15/30 с / 1 мин / выкл</b> — частота обновления страницы</li>
-      <li><b>⟳</b> — обновить сейчас</li>
-      <li><b>◐</b> — переключить тему (auto / light / dark)</li>
-      <li><b>🔔</b> — включить уведомления браузера (alert при offline/online монитор-устройств)</li>
-    </ul>
+    <details class="help-sect"><summary>🎛 Управление в шапке</summary>
+      <ul>
+        <li><b>Карта сети</b> — открыть страницу инвентаря.</li>
+        <li><b>👥 Пользователи</b> (только админу) — управление и аудит-лог.</li>
+        <li><b>О дашборде</b> · <b>Версия N.N.N</b> · <b>Кнопка Argon</b> (на Pi с Argon ONE V3).</li>
+        <li>Селектор обновления <b>1 / 5 / 15 / 30 с / 1 мин / выкл</b>.</li>
+        <li><b>⟳</b> обновить сейчас · <b>◐</b> тема (auto/light/dark) · <b>🔔</b> notifications · ⏻ выход.</li>
+      </ul>
+    </details>
 
-    <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">📱 PWA</h3>
-    <p style="font-size:12.5px;line-height:1.5;margin:0">На iPad/iPhone в Safari: <b>Поделиться → На экран Домой</b> — превратит дашборд в иконку «Монитор SC», запускается на весь экран без браузерной строки.</p>
-
-    <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">🔒 Режим клиента</h3>
-    <p style="font-size:12.5px;line-height:1.5;margin:0">URL <code style="background:var(--bg-hover);padding:1px 5px;border-radius:3px;font-family:var(--mono)">/client</code> — тот же дашборд без кнопок управления (только просмотр). Безопасно раздать клиенту/гостю.</p>
+    <details class="help-sect"><summary>📱 PWA + 🔒 Режим клиента</summary>
+      <p><b>iPad/iPhone Safari</b>: «Поделиться → На экран Домой» — иконка «Монитор SC» во весь экран.</p>
+      <p><b>URL <code>/client</code></b> — тот же дашборд без кнопок управления (read-only). Безопасно раздать клиенту/гостю.</p>
+    </details>
 
     <div style="display:flex;justify-content:flex-end;margin-top:18px">
-      <button class="btn-action" style="color:var(--text);border-color:var(--border)" onclick="hideAppHelp()">Закрыть</button>
+      <button class="btn-close" onclick="hideAppHelp()">Закрыть</button>
     </div>
   </div>
 </div>
@@ -813,7 +833,7 @@
       </div>
     </div>
     <div style="display:flex;justify-content:flex-end;margin-top:14px">
-      <button class="btn-action" style="color:var(--text);border-color:var(--border)" onclick="hideArgonHelp()">Закрыть</button>
+      <button class="btn-close" onclick="hideArgonHelp()">Закрыть</button>
     </div>
   </div>
 </div>

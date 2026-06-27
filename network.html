@@ -31,6 +31,20 @@
   .btn-action.c-blue   { background: rgba(55,138,221,0.12); border-color: rgba(55,138,221,0.4); color: #378ADD; }
   .btn-action.c-purple { background: rgba(127,119,221,0.14); border-color: rgba(127,119,221,0.4); color: #7F77DD; }
   .btn-action.c-mute   { color: var(--text-muted); border-color: var(--border); }
+  /* Help-модалки: collapsible sections (общий стиль с index.html) */
+  .help-sect { border-bottom: 1px solid var(--border); padding: 4px 0; }
+  .help-sect:last-of-type { border-bottom: none; }
+  .help-sect > summary { font-size: 13.5px; font-weight: 500; padding: 8px 4px; cursor: pointer; user-select: none; list-style: none; display: flex; align-items: center; gap: 6px; transition: color 0.12s; -webkit-tap-highlight-color: transparent; }
+  .help-sect > summary::-webkit-details-marker { display: none; }
+  .help-sect > summary::before { content: '▸'; font-size: 11px; color: var(--text-dim); transition: transform 0.15s; display: inline-block; width: 12px; }
+  .help-sect[open] > summary::before { transform: rotate(90deg); color: var(--accent); }
+  .help-sect > summary:hover { color: var(--accent); }
+  .help-sect > p, .help-sect > ul { font-size: 12.5px; line-height: 1.55; color: var(--text); padding: 0 0 8px 22px; margin: 4px 0; }
+  .help-sect > ul { padding-left: 38px; }
+  .help-sect > ul li { margin: 3px 0; }
+  /* Унифицированная кнопка "Закрыть" в модалках */
+  .btn-close { padding: 8px 18px; font: inherit; font-size: 13px; font-weight: 500; color: var(--text); background: transparent; border: 1px solid var(--border); border-radius: 9px; cursor: pointer; transition: background 0.15s; -webkit-tap-highlight-color: transparent; }
+  .btn-close:hover { background: var(--bg-hover); }
   /* Explicit theme overrides via data-theme="light|dark" on <html> — синхронизировано с index.html */
   html[data-theme="light"] {
     --bg: #ffffff; --bg-card: #f7f8fa; --bg-inner: #ffffff; --bg-hover: #eef0f4;
@@ -310,87 +324,90 @@
       <h2 style="margin:0 0 6px;font-size:19px;font-weight:500">Карта сети — что умеет</h2>
       <p style="margin:0 0 16px;font-size:12.5px;color:var(--text-muted)">Инвентарь всех устройств в локальной сети с автодискавери, маркировкой, доступами, мониторингом доступности.</p>
 
-      <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">🔍 Дискавери и опрос</h3>
-      <ul style="font-size:12.5px;line-height:1.6;padding-left:20px;margin:0">
-        <li><b>🔍 Сканировать сеть</b> — <code>nmap -sn -PR</code> по всей подсети /24. Находит IP + MAC + вендор. Запускается в фоне, занимает ~30 сек на ~100 устройств.</li>
-        <li><b>Автоскан</b> — фон, по умолчанию раз в 4 ч (настраивается в ⚙️ Настройки). Новые устройства автоматом попадают в очередь FP-опроса.</li>
-        <li><b>Presence check</b> — лёгкий ARP-скан раз в 60 сек обновляет статус онлайн/офлайн у всех уже известных устройств и логирует переходы.</li>
-        <li><b>🔬 Опросить службы у всех / по одному</b> — <code>nmap -sV</code> по 13 типичным портам (22/80/443/554/1883/8080...). Заполняет открытые порты + автоматически подставляет URL веб-интерфейса.</li>
-        <li><b>🔗 Sync MikroTik</b> — подтягивает имена устройств из DHCP-comments в MikroTik (RouterOS 7 REST API). Match по MAC. Override always: всегда перезаписывает имя. Также проставляет флаг <b>static/dynamic</b> в одноимённой колонке. Кириллица в comment'ах декодируется из CP1251 автоматически.</li>
-        <li><b>mDNS-обогащение</b> — при каждом скане <code>avahi-browse</code> подтягивает «человеческие» имена для Sonos / Apple / HomeKit / принтеров.</li>
-        <li><b>🏷 Переклассифицировать</b> — пройти по «Без типа» и назначить тип по vendor (Hikvision→camera, MikroTik→network, и т.п.).</li>
-      </ul>
+      <p style="margin:0 0 14px;font-size:12.5px;color:var(--text-muted)">Кликни на раздел чтобы раскрыть.</p>
 
-      <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">📋 Таблица устройств</h3>
-      <ul style="font-size:12.5px;line-height:1.6;padding-left:20px;margin:0">
-        <li><b>Сортировка</b> — клик по заголовку колонки. IP сортируется натурально (.5 до .50). Повторный клик — обратный порядок.</li>
-        <li><b>Фильтры</b> — чипы наверху: Все / Онлайн / Офлайн + динамические per-type.</li>
-        <li><b>Поиск</b> — по имени / hostname / IP / MAC / описанию / комнате / заметкам.</li>
-        <li><b>Колонка DHCP</b> — <span class="pill" style="background:rgba(29,158,117,0.15);color:var(--ok);border-color:transparent;font-size:10px">static</span> = закреплён за MAC в MikroTik (DHCP reservation), <span class="pill" style="background:rgba(154,161,173,0.15);color:var(--text-muted);border-color:transparent;font-size:10px">dynamic</span> = получает любой свободный IP, «—» = не было ещё синка с MikroTik. Заполняется по кнопке 🔗 Sync MikroTik.</li>
-        <li><b>24h полоска</b> в столбце «Статус» — мини-визуализация доступности за сутки (зелёный=онлайн, жёлтый=частично, красный=офлайн).</li>
-      </ul>
+      <details class="help-sect" open><summary>🔍 Дискавери и опрос</summary>
+        <ul>
+          <li><b>🔍 Сканировать сеть</b> — <code>nmap -sn -PR</code> по всей подсети /24. Находит IP + MAC + вендор. ~30 сек на 100 устройств.</li>
+          <li><b>Автоскан</b> — фон, по умолчанию раз в 4 ч (настраивается). Новые устройства попадают в очередь FP-опроса.</li>
+          <li><b>Presence check</b> — ARP-скан раз в 60 сек + ICMP fallback (гистерезис 3 пропуска).</li>
+          <li><b>🔬 Опросить службы</b> — <code>nmap -sV</code> по 13 портам (22/80/443/554/1883/8080...). Заполняет открытые порты + URL веб-интерфейса.</li>
+          <li><b>🔗 Sync MikroTik</b> — имена устройств из DHCP-comments. Match по MAC, override always. Флаг static/dynamic. CP1251 декодируется автоматом. Раз в час auto-sync в фоне.</li>
+          <li><b>mDNS-обогащение</b> — <code>avahi-browse</code> подтягивает «человеческие» имена (Sonos / Apple / HomeKit / принтеры).</li>
+          <li><b>🏷 Переклассифицировать</b> — пройти по «Без типа» и назначить тип по vendor (Hikvision→camera, MikroTik→network, и т.п.).</li>
+        </ul>
+      </details>
 
-      <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">📝 Карточка устройства (клик на строку)</h3>
-      <ul style="font-size:12.5px;line-height:1.6;padding-left:20px;margin:0">
-        <li><b>Поля</b>: имя, помещение, тип, URL веб-интерфейса, описание, заметки.</li>
-        <li><b>☑ Показывать на дашборде</b> — устройство появится плиткой на главной странице с 24h-полоской.</li>
-        <li><b>Теги</b> — свободные пилюли. Enter / запятая = добавить. Клик на × = удалить.</li>
-        <li><b>Фото</b> — загрузить картинку устройства до 2 МБ.</li>
-        <li><b>Доступы</b> — несколько пар логин/пароль на устройство (например admin + viewer + RTSP). Кнопки 👁 показать, 📋 копировать.</li>
-        <li><b>История присутствия</b> — uptime % за 30 дней + лента событий онлайн/офлайн.</li>
-        <li><b>История изменений</b> — что и когда правили в карточке (audit log, retention 90 дней). Записи синка MikroTik помечаются как <code>sync_mikrotik</code>.</li>
-        <li><b>Метаданные</b> — IP / MAC / vendor / когда впервые увидели / когда последний раз был онлайн.</li>
-        <li><b>Открытые порты</b> — результат опроса служб (nmap -sV).</li>
-      </ul>
+      <details class="help-sect"><summary>📋 Таблица устройств</summary>
+        <ul>
+          <li><b>Сортировка</b> — клик по заголовку. IP сортируется натурально (.5 до .50). Повторный клик — обратный.</li>
+          <li><b>Фильтры</b>: чипы Все / Онлайн / Офлайн + динамические per-type.</li>
+          <li><b>Поиск</b> — имя / hostname / IP / MAC / описание / комната / заметки.</li>
+          <li><b>Колонка DHCP</b> — <span class="pill" style="background:rgba(29,158,117,0.15);color:var(--ok);border-color:transparent;font-size:10px">static</span> = закреплён за MAC, <span class="pill" style="background:rgba(154,161,173,0.15);color:var(--text-muted);border-color:transparent;font-size:10px">dynamic</span> = любой свободный, «—» = не было синка с MikroTik.</li>
+          <li><b>24h полоска</b> в колонке «Статус» — мини-visualization доступности за сутки.</li>
+        </ul>
+      </details>
 
-      <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">🔘 Действия в карточке</h3>
-      <ul style="font-size:12.5px;line-height:1.6;padding-left:20px;margin:0">
-        <li><b>💾 Сохранить</b> — сохранить правки полей (теги, фото, доступы сохраняются автоматом).</li>
-        <li><b>↗ Открыть веб-UI</b> — если URL задан или подобран опросом.</li>
-        <li><b>🖥 Терминал</b> — открыть SSH-сессию к устройству в браузере (через WebSSH на :8022). Пароль вводится в форме webssh.</li>
-        <li><b>📋 SSH cmd</b> — скопировать команду <code>ssh pi@&lt;ip&gt;</code> в буфер (для родного терминала).</li>
-        <li><b>📡 Ping сейчас</b> — мгновенный ICMP-пинг + RTT.</li>
-        <li><b>🔬 Опросить службы</b> — nmap -sV для одного устройства.</li>
-        <li><b>📊 SNMP опрос</b> — для устройств типа network (нужно community). Тащит sysName / sysDescr / sysUpTime / число интерфейсов.</li>
-        <li><b>🗑 Удалить</b> — убрать из карты (физически устройство не трогается).</li>
-      </ul>
+      <details class="help-sect"><summary>📝 Карточка устройства (клик на строку)</summary>
+        <ul>
+          <li><b>Поля</b>: имя, помещение, тип, URL, описание, заметки.</li>
+          <li><b>☑ Показывать на дашборде</b> — устройство появится плиткой на главной с 24h-полоской.</li>
+          <li><b>Теги</b> — Enter/запятая добавляют. Клик на × = удалить.</li>
+          <li><b>Фото</b> — несколько на устройство, по 2 МБ. Hover показывает крестик удаления.</li>
+          <li><b>Доступы</b> — несколько пар login/password (admin + viewer + RTSP и т.п.). 👁 показать, 📋 копировать.</li>
+          <li><b>История присутствия</b> — uptime % за 30 дней + лента событий.</li>
+          <li><b>История изменений</b> — audit log, retention 90 дней. Sync MikroTik помечается как <code>sync_mikrotik</code>.</li>
+          <li><b>Метаданные</b>: IP / MAC / vendor / first_seen / last_seen.</li>
+          <li><b>Открытые порты</b> — результат nmap -sV.</li>
+        </ul>
+      </details>
 
-      <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">☑ Bulk операции</h3>
-      <p style="font-size:12.5px;line-height:1.5;margin:0">Чекбоксы слева. При выборе всплывает нижняя панель: массово назначить <b>помещение / тип / показ на дашборде</b>. Удобно для «выбрать все камеры → присвоить помещение Двор» одним кликом.</p>
+      <details class="help-sect"><summary>🔘 Действия в карточке</summary>
+        <ul>
+          <li><b>💾 Сохранить</b> — правки полей (теги, фото, доступы сохраняются автоматом).</li>
+          <li><b>↗ Открыть веб-UI</b> — если URL задан или подобран опросом.</li>
+          <li><b>🖥 Терминал</b> — SSH-сессия в браузере (через WebSSH на :8022).</li>
+          <li><b>📋 SSH cmd</b> — копировать <code>ssh pi@&lt;ip&gt;</code> в буфер.</li>
+          <li><b>📡 Ping</b> — ICMP + RTT мгновенно.</li>
+          <li><b>🔬 Опросить службы</b> — nmap -sV для одного устройства.</li>
+          <li><b>📊 SNMP опрос</b> — для типа network (нужно community).</li>
+          <li><b>🗑 Удалить</b> — убрать из карты (устройство не трогается).</li>
+        </ul>
+      </details>
 
-      <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">🗺 Карта IP (переключатель справа)</h3>
-      <p style="font-size:12.5px;line-height:1.5;margin:0">Визуальная сетка 16×16 = 256 IP подсети.</p>
-      <ul style="font-size:12.5px;line-height:1.6;padding-left:20px;margin:4px 0 0">
-        <li><b>Фон ячейки = тип адреса</b>: <span style="color:var(--ok)">зелёный</span> = static (DHCP-резервация по MAC в MikroTik), <span style="color:#BA7517">жёлтый</span> = dynamic (получил любой свободный IP), <span style="color:#A66C35">коричневый</span> = шлюз (<code>.1</code>), <span style="color:#3FB0CC">голубой</span> = этот контроллер, белый = свободен / скрыт фильтром.</li>
-        <li><b>Точка снизу-справа = статус</b>: <span style="color:#1D9E75">зелёная</span> онлайн, <span style="color:#E24B4A">красная</span> офлайн.</li>
-        <li><b>4 чекбокса-фильтра</b> над картой — все комбинации type×status. По умолчанию выключен только dynamic·offline (старые DHCP-арендаторы которые давно отключились).</li>
-        <li>Шлюз <code>.1</code> и этот контроллер показываются всегда независимо от фильтров.</li>
-        <li>Клик по занятой ячейке — раскрытие карточки устройства в таблице.</li>
-      </ul>
-      <p style="font-size:12.5px;line-height:1.5;margin:6px 0 0;color:var(--text-muted)">
-        Та же карта продублирована в самом низу дашборда (<a href="/" style="color:var(--info)">/</a>) — там клик по ячейке открывает эту страницу.
-      </p>
+      <details class="help-sect"><summary>☑ Bulk операции</summary>
+        <p>Чекбоксы слева. При выборе всплывает нижняя панель: массово назначить <b>помещение / тип / показ на дашборде</b>. Удобно для «выбрать все камеры → присвоить помещение Двор» одним кликом.</p>
+      </details>
 
-      <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">⚙️ Настройки</h3>
-      <ul style="font-size:12.5px;line-height:1.6;padding-left:20px;margin:0">
-        <li><b>Период автоскана</b> — выкл / 30 мин / 1 / 2 / 4 / 6 / 12 / 24 ч.</li>
-        <li><b>Типы устройств</b> — переименовать встроенные, добавить свои (термостат / выключатель / etc).</li>
-      </ul>
+      <details class="help-sect"><summary>🗺 Карта IP (переключатель справа)</summary>
+        <p>Визуальная сетка 16×16 = 256 IP подсети.</p>
+        <ul>
+          <li><b>Фон = тип</b>: <span style="color:var(--ok)">зелёный</span> static, <span style="color:#BA7517">жёлтый</span> dynamic, <span style="color:#A66C35">коричневый</span> шлюз <code>.1</code>, <span style="color:#3FB0CC">голубой</span> = этот контроллер.</li>
+          <li><b>Точка справа-снизу = статус</b>: <span style="color:#1D9E75">зелёная</span> online, <span style="color:#E24B4A">красная</span> offline.</li>
+          <li><b>4 чекбокса</b> над картой. По умолчанию выключен dynamic·offline.</li>
+          <li>Шлюз и этот контроллер видны всегда независимо от фильтров.</li>
+          <li>Клик по ячейке — раскрытие карточки. Та же карта продублирована внизу дашборда.</li>
+        </ul>
+      </details>
 
-      <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">🎛 Управление в шапке</h3>
-      <ul style="font-size:12.5px;line-height:1.6;padding-left:20px;margin:0">
-        <li><b>← мониторинг контроллера</b> — вернуться на главную страницу дашборда.</li>
-        <li><b>◐</b> — переключить тему (auto / light / dark), синхронизировано с дашбордом.</li>
-      </ul>
+      <details class="help-sect"><summary>⚙️ Настройки и шапка</summary>
+        <ul>
+          <li><b>Период автоскана</b> — выкл / 30 мин / 1 / 2 / 4 / 6 / 12 / 24 ч.</li>
+          <li><b>MikroTik (REST API)</b> — IP/логин/пароль для интеграции (placeholder = автодетект gateway).</li>
+          <li><b>Типы устройств</b> — переименовать встроенные, добавить свои.</li>
+          <li><b>← Мониторинг</b> — на главную · <b>? Возможности</b> — этот help · <b>◐</b> тема · ⏻ выход.</li>
+        </ul>
+      </details>
 
-      <h3 style="font-size:14px;font-weight:500;margin:14px 0 6px">💾 Экспорт и бекапы</h3>
-      <ul style="font-size:12.5px;line-height:1.6;padding-left:20px;margin:0">
-        <li><b>⬇ Экспорт CSV</b> — выгрузка всей таблицы с именами / IP / MAC / типами / комнатами / основными логинами-паролями.</li>
-        <li>Автоматический бекап <code>inventory.db</code> в <code>/var/lib/smartcomm-dashboard/backups/</code>, retention 30 дней. Срабатывает при каждом рестарте дашборда (после деплоя).</li>
-      </ul>
+      <details class="help-sect"><summary>💾 Экспорт и бекапы</summary>
+        <ul>
+          <li><b>⬇ Экспорт CSV</b> — выгрузка таблицы (имена / IP / MAC / типы / комнаты / основные логины-пароли).</li>
+          <li>Auto-backup <code>inventory.db</code> в <code>/var/lib/smartcomm-dashboard/backups/</code>, retention 30 дней. Срабатывает при рестарте.</li>
+        </ul>
+      </details>
 
       <div style="display:flex;justify-content:flex-end;margin-top:18px">
-        <button class="btn" onclick="hideNetHelp()">Закрыть</button>
+        <button class="btn-close" onclick="hideNetHelp()">Закрыть</button>
       </div>
     </div>
   </div>
@@ -525,7 +542,7 @@
     </div>
 
     <div class="modal-actions">
-      <button class="btn" onclick="hideSettingsModal()">Закрыть</button>
+      <button class="btn-close" onclick="hideSettingsModal()">Закрыть</button>
     </div>
   </div>
 </div>
@@ -588,7 +605,7 @@
     <div class="field"><label class="field-label">Пароль</label><input type="text" id="add-password"></div>
     <div class="field"><label class="field-label">URL веб-интерфейса (если есть)</label><input type="text" id="add-url" placeholder="http://устройство/"></div>
     <div class="modal-actions">
-      <button class="btn" onclick="hideAddModal()">Отмена</button>
+      <button class="btn-close" onclick="hideAddModal()">Отмена</button>
       <button class="btn primary" onclick="submitAdd()">Создать</button>
     </div>
   </div>
