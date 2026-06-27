@@ -2,7 +2,7 @@
 
 Все значимые изменения проекта. Формат — Keep a Changelog + SemVer.
 
-## [1.0.0] — 2026-06-27
+## 1.0.0 — 2026-06-27
 
 Первый публичный релиз. Версионирование + GitHub + автообновление.
 
@@ -18,7 +18,7 @@
 ### Changed
 - Все Unicode-символы из «технического» диапазона (U+23FB ⏻ POWER, U+23F3 ⏳ HOURGLASS, U+FF0B ＋ FULLWIDTH PLUS) заменены на SVG-иконки или ASCII-эквиваленты — для надёжного рендеринга на любых системах
 
-## [0.9.0] — 2026-06-27
+## 0.9.0 — 2026-06-27
 
 ### Added — Авторизация и аудит
 - Cookie-based аутентификация (admin/admin по умолчанию, `must_change_password=1`)
@@ -39,7 +39,7 @@
 - `settings_iridium_changed`, `settings_mikrotik_changed`
 - `mikrotik_sync`
 
-## [0.8.0] — 2026-06-27
+## 0.8.0 — 2026-06-27
 
 ### Renamed — нейтральное имя для тиражирования
 - `pi-dashboard` → `smartcomm-dashboard` (пути, service, БД, ident waitress)
@@ -55,7 +55,7 @@
 - Bundled Chart.js v4.4.1 (offline-режим, без CDN)
 - README.md с пошаговой инструкцией
 
-## [0.7.0] — 2026-06-25
+## 0.7.0 — 2026-06-25
 
 ### Added — IP-карта и автодетект сети
 - 4 чекбокса-фильтра на карте IP: static·online, static·offline, dynamic·online, dynamic·offline
@@ -74,7 +74,7 @@
 - Sampler MikroTik = единственный владелец `_TRAFFIC_PREV` (убрана race condition с HTTP-endpoint)
 - Warm-up: первый snapshot отбрасывается чтобы избежать нулевой delta
 
-## [0.6.0] — 2026-06-24
+## 0.6.0 — 2026-06-24
 
 ### Added — Стабильность и production-уровень
 - Заменён Flask dev-server на **waitress 2.1** (production WSGI, 8 threads, без bottleneck)
@@ -109,7 +109,7 @@
 - Тема (light/dark) синхронизирована между страницами через `localStorage('theme')`
 - WebSSH на :8022 — кнопка «🖥 Терминал» в карточке устройства и на Pi uptime
 
-## [0.5.0] — 2026-06-24
+## 0.5.0 — 2026-06-24
 
 ### Added — iRidium HTTP API
 - Reverse-engineering: `POST /html/login.html` → cookie `ir-session-id` → 6+ endpoints
@@ -121,7 +121,7 @@
 - Smart-статус плитки: «активен / загрузка проекта (~3 мин) / порт не отвечает / остановлен»
 - 3-минутный countdown «грузит проект, ещё ~N сек» после рестарта
 
-## [0.4.0] — 2026-06-24
+## 0.4.0 — 2026-06-24
 
 ### Added — MikroTik integration
 - REST API клиент для MikroTik RouterOS 7+ (basic auth, без бинарных протоколов)
@@ -137,7 +137,7 @@
 - Hourly background auto-sync DHCP comments
 - Модалка «MikroTik (REST API)» в Настройках карты сети
 
-## [0.3.0] — 2026-06-24
+## 0.3.0 — 2026-06-24
 
 ### Added — Network inventory page (`/network`)
 - SQLite-backed device map (таблицы: devices, scans, settings, device_types, device_events, device_credentials, device_audit)
@@ -158,7 +158,7 @@
 - Сетка плиток для устройств с галочкой «Показывать на дашборде»
 - 24h-полоска доступности + подпись «онлайн/офлайн с ДАТА»
 
-## [0.2.0] — 2026-06-23
+## 0.2.0 — 2026-06-23
 
 ### Performance
 - `/api/status` оптимизирован: **175 мс → 31 мс** (5.6× быстрее)
@@ -176,7 +176,7 @@
 - API Notification: alert при offline-устройстве из мониторинга
 - Иконка 🔔 в шапке для разрешения уведомлений
 
-## [0.1.0] — 2026-06-23
+## 0.1.0 — 2026-06-23
 
 ### Initial release — Pi diagnostic dashboard
 
