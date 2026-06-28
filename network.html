@@ -45,6 +45,10 @@
   /* Унифицированная кнопка "Закрыть" в модалках */
   .btn-close { padding: 8px 18px; font: inherit; font-size: 13px; font-weight: 500; color: var(--text); background: transparent; border: 1px solid var(--border); border-radius: 9px; cursor: pointer; transition: background 0.15s; -webkit-tap-highlight-color: transparent; }
   .btn-close:hover { background: var(--bg-hover); }
+  /* SSH credential picker */
+  .ssh-pick-list { display: flex; flex-direction: column; gap: 6px; }
+  .ssh-pick-row { display: flex; flex-direction: column; gap: 2px; align-items: flex-start; padding: 10px 12px; font: inherit; font-size: 13px; color: var(--text); background: var(--bg-inner); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; text-align: left; transition: background 0.12s, border-color 0.12s; -webkit-tap-highlight-color: transparent; }
+  .ssh-pick-row:hover { background: var(--bg-hover); border-color: var(--accent); }
   /* Explicit theme overrides via data-theme="light|dark" on <html> — синхронизировано с index.html */
   html[data-theme="light"] {
     --bg: #ffffff; --bg-card: #f7f8fa; --bg-inner: #ffffff; --bg-hover: #eef0f4;
@@ -1108,7 +1112,7 @@ function detailHtml(d) {
         <div style="margin-top: 14px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
           <button class="btn primary" onclick="event.stopPropagation();saveDevice(${d.id})">💾 Сохранить</button>
           ${url ? `<button class="btn" onclick="event.stopPropagation();window.open('${escapeHtml(url)}', '_blank')">↗ Открыть веб-UI</button>` : ''}
-          ${d.ip ? `<button class="btn" onclick="event.stopPropagation();openWebSSH('${escapeAttr(d.ip)}','pi')" title="Открыть SSH-терминал в браузере">🖥 Терминал</button>` : ''}
+          ${d.ip ? `<button class="btn" onclick="event.stopPropagation();openWebSSH(${d.id}, '${escapeAttr(d.ip)}')" title="Открыть SSH-терминал в браузере (пароль из credentials)">🖥 Терминал</button>` : ''}
           ${d.ip ? `<button class="btn" onclick="event.stopPropagation();copySSH('${escapeAttr(d.ip)}')" title="Скопировать команду ssh">📋 SSH cmd</button>` : ''}
           <button class="btn" id="ping-btn-${d.id}" onclick="event.stopPropagation();pingDevice(${d.id})">📡 Ping сейчас</button>
           <button class="btn" id="fp-btn-${d.id}" onclick="event.stopPropagation();fingerprintDevice(${d.id})">🔬 Опросить службы</button>
@@ -1239,12 +1243,69 @@ async function fetchAudit(deviceId) {
 }
 
 // ============ SSH ============
-function openWebSSH(ip, user) {
-  user = user || 'pi';
+// Открывает webssh с авто-подбором пароля из credentials карточки.
+// Логика:
+//   0 credentials → открыть webssh с дефолтным юзером 'pi', пароль вводится руками
+//   1 credential  → авто-подставить логин+пароль
+//   2+ creds      → popup-выбор «admin / viewer / root»
+//
+// SECURITY: пароль уходит в URL → виден в history браузера + логах webssh.
+// Это приемлемо для LAN-only инструмента где сам доступ к дашборду уже под auth'ом.
+async function openWebSSH(deviceId, ip) {
+  let creds = [];
+  if (deviceId) {
+    try {
+      const r = await fetch('/api/network/devices/' + deviceId + '/credentials');
+      const j = await r.json();
+      creds = (j.credentials || []).filter(c => c.username && c.password);
+    } catch (e) { /* fallback на default pi */ }
+  }
+
+  if (creds.length === 0) {
+    _openWebSSHWithCred(ip, 'pi', null);
+    return;
+  }
+  if (creds.length === 1) {
+    _openWebSSHWithCred(ip, creds[0].username, creds[0].password);
+    return;
+  }
+  _showSSHPicker(ip, creds);
+}
+
+function _openWebSSHWithCred(ip, user, password) {
   const host = location.hostname || '127.0.0.1';
-  const url = 'http://' + host + ':8022/?hostname=' + encodeURIComponent(ip)
-            + '&port=22&username=' + encodeURIComponent(user);
+  let url = 'http://' + host + ':8022/?hostname=' + encodeURIComponent(ip)
+          + '&port=22&username=' + encodeURIComponent(user || 'pi');
+  if (password) url += '&password=' + encodeURIComponent(password);
   window.open(url, 'webssh-' + ip, 'width=1000,height=700');
+}
+
+function _showSSHPicker(ip, creds) {
+  // Удалим предыдущий picker если он висит
+  const old = document.getElementById('ssh-picker');
+  if (old) old.remove();
+  const box = document.createElement('div');
+  box.id = 'ssh-picker';
+  box.className = 'modal-backdrop show';
+  box.style.cssText = 'display:flex;align-items:center;justify-content:center';
+  box.onclick = (e) => { if (e.target === box) box.remove(); };
+  const rows = creds.map((c, i) => {
+    const label = c.label ? escapeHtml(c.label) + ' · ' : '';
+    return `<button class="ssh-pick-row" onclick="document.getElementById('ssh-picker').remove();_openWebSSHWithCred('${escapeAttr(ip)}', ${JSON.stringify(c.username)}, ${JSON.stringify(c.password)})">
+        <b>${label}${escapeHtml(c.username)}</b>
+        <span style="color:var(--text-dim);font-size:11px">${c.notes ? escapeHtml(c.notes) : '—'}</span>
+      </button>`;
+  }).join('');
+  box.innerHTML = `
+    <div class="modal-box" style="max-width:420px" onclick="event.stopPropagation()">
+      <h2 style="margin:0 0 6px;font-size:17px;font-weight:500">SSH к ${escapeHtml(ip)}</h2>
+      <p style="margin:0 0 14px;font-size:12px;color:var(--text-muted)">Выбери доступ для подключения</p>
+      <div class="ssh-pick-list">${rows}</div>
+      <div style="display:flex;justify-content:flex-end;margin-top:14px">
+        <button class="btn-close" onclick="document.getElementById('ssh-picker').remove()">Отмена</button>
+      </div>
+    </div>`;
+  document.body.appendChild(box);
 }
 function copySSH(ip) {
   const cmd = 'ssh pi@' + ip;
