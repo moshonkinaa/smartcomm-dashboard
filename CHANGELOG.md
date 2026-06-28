@@ -2,6 +2,33 @@
 
 Все значимые изменения проекта. Формат — Keep a Changelog + SemVer.
 
+## 1.3.1 — 2026-06-27
+
+CSS-housekeeping: utility-классы + design tokens.
+
+### Added — Дизайн-токены
+- CSS-переменные `--r-sm: 6px`, `--r-md: 9px`, `--r-lg: 14px` — единая шкала border-radius (раньше 10+ магических значений: 3/6/7/8/9/10/11/12/14 в разных местах)
+- Все card / modal / header / pill теперь используют `border-radius: var(--r-lg)` — единый стиль закругления
+
+### Added — Utility-классы
+Добавлены в `index.html` и `network.html` (синхронно):
+- **Display**: `.hidden`, `.flex`, `.flex-col`, `.flex-wrap`, `.items-center`, `.items-baseline`, `.justify-end`, `.justify-between`
+- **Spacing**: `.gap-1..4` (4/8/12/16px), `.mt-1..5`, `.mb-1..4`
+- **Color**: `.text-muted`, `.text-dim`, `.text-ok`, `.text-warn`, `.text-err`, `.text-info`
+- **Font-size**: `.fs-xs` (11), `.fs-sm` (11.5), `.fs-md` (12.5), `.fs-lg` (14)
+- **Other**: `.full-w` (width: 100%)
+
+### Added — `.btn-action.c-mute` в index.html
+- Раньше существовал только в network.html — теперь синхронно в обоих файлах
+- Заменил inline-style `style="color: var(--text-muted); border-color: var(--border)"` на класс `c-mute` в 4 кнопках шапки (Users / Argon / О дашборде / Версия)
+
+### Changed
+- Кнопки шапки используют новый класс `.btn-action.c-mute` — на 4 inline-style меньше
+- Все 14px border-radius (.card, .modal-box, .header, .pill, .chip, .modal) перешли на `var(--r-lg)` — централизованное управление
+
+### Why
+Аудит показал ~150 inline `style="..."` атрибутов с повторяющимися паттернами. Этот батч закладывает **базис системы** — design tokens + utility classes — чтобы новый код использовал их вместо inline. Mass-convert всех 150 inline-styles отложен (риск регрессий слишком велик), но фундамент готов. Inline-styles на `display:none` намеренно оставлены: JS активно дёргает `el.style.display = ''` для toggle, а CSS-класс этого бы не пускал.
+
 ## 1.3.0 — 2026-06-27
 
 SSH-web с auto-password из credentials карточки устройства (Task #7).

@@ -12,6 +12,10 @@
 <link rel="manifest" href="/manifest.json">
 <style>
   :root {
+    /* Дизайн-система: радиусы (small/medium/large) и spacing */
+    --r-sm: 6px;    /* пилюли, мелкие кнопки, теги */
+    --r-md: 9px;    /* обычные кнопки, инпуты */
+    --r-lg: 14px;   /* карточки, модалки */
     --bg: #ffffff;
     --bg-card: #f7f8fa;
     --bg-inner: #ffffff;
@@ -61,9 +65,43 @@
   body.readonly .header-actions,
   body.readonly .refresh-ctl button { display: none !important; }
   * { box-sizing: border-box; }
+  /* Utility-классы — для замены повторяющихся inline-style */
+  .hidden { display: none !important; }
+  .flex { display: flex; }
+  .flex-col { display: flex; flex-direction: column; }
+  .flex-row { display: flex; flex-direction: row; }
+  .flex-wrap { flex-wrap: wrap; }
+  .items-center { align-items: center; }
+  .items-baseline { align-items: baseline; }
+  .justify-end { justify-content: flex-end; }
+  .justify-between { justify-content: space-between; }
+  .gap-1 { gap: 4px; }
+  .gap-2 { gap: 8px; }
+  .gap-3 { gap: 12px; }
+  .gap-4 { gap: 16px; }
+  .mt-1 { margin-top: 4px; }
+  .mt-2 { margin-top: 8px; }
+  .mt-3 { margin-top: 12px; }
+  .mt-4 { margin-top: 16px; }
+  .mt-5 { margin-top: 20px; }
+  .mb-1 { margin-bottom: 4px; }
+  .mb-2 { margin-bottom: 8px; }
+  .mb-3 { margin-bottom: 12px; }
+  .mb-4 { margin-bottom: 16px; }
+  .text-muted { color: var(--text-muted); }
+  .text-dim { color: var(--text-dim); }
+  .text-ok { color: var(--ok); }
+  .text-warn { color: var(--warn); }
+  .text-err { color: var(--err); }
+  .text-info { color: var(--info); }
+  .fs-xs { font-size: 11px; }
+  .fs-sm { font-size: 11.5px; }
+  .fs-md { font-size: 12.5px; }
+  .fs-lg { font-size: 14px; }
+  .full-w { width: 100%; }
   html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; -webkit-text-size-adjust: 100%; }
   .container { max-width: 1200px; margin: 0 auto; padding: 14px; }
-  .header { display: flex; justify-content: space-between; align-items: center; padding: 18px 20px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; margin-bottom: 14px; gap: 12px; }
+  .header { display: flex; justify-content: space-between; align-items: center; padding: 18px 20px; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r-lg); margin-bottom: 14px; gap: 12px; }
   .header h1 { font-size: 22px; font-weight: 500; margin: 0; letter-spacing: -0.2px; }
   .header .subtitle { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
   .header .meta { font-size: 12px; color: var(--text-muted); text-align: right; line-height: 1.6; white-space: nowrap; }
@@ -74,7 +112,7 @@
   .grid { display: grid; gap: 12px; margin-bottom: 12px; }
   .grid-4 { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
   .grid-2 { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
-  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px; }
+  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 14px 16px; }
   .card-title { font-size: 12px; color: var(--text-muted); margin: 0 0 6px; }
   .card-value { font-size: 24px; font-weight: 500; margin: 0; line-height: 1.1; font-variant-numeric: tabular-nums; }
   .card-sub { font-size: 12px; color: var(--text-dim); margin: 6px 0 0; }
@@ -104,7 +142,7 @@
   .refresh-ctl button { padding: 6px 8px; font: inherit; line-height: 1; background: var(--bg-inner); color: var(--text); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
   .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 200; padding: 16px; }
   .modal-backdrop.show { display: flex; }
-  .modal-box { background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; padding: 20px; max-width: 640px; width: 100%; max-height: 90vh; overflow-y: auto; }
+  .modal-box { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 20px; max-width: 640px; width: 100%; max-height: 90vh; overflow-y: auto; }
   .monitored-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
   .monitored-tile { padding: 12px; background: var(--bg-inner); border: 1px solid var(--border); border-radius: 10px; transition: box-shadow 0.15s; }
   .monitored-tile.online { border-color: rgba(29,158,117,0.45); border-left: 4px solid rgba(29,158,117,0.85); padding-left: 9px; }
@@ -124,6 +162,7 @@
   .btn-action.c-purple { background: rgba(127,119,221,0.14); border-color: rgba(127,119,221,0.4); color: #7F77DD; }
   .btn-action.c-amber  { background: rgba(239,159,39,0.13); border-color: rgba(239,159,39,0.4); color: #BA7517; }
   .btn-action.c-red    { background: rgba(226,75,74,0.12); border-color: rgba(226,75,74,0.4); color: #E24B4A; }
+  .btn-action.c-mute   { color: var(--text-muted); border-color: var(--border); }
   @media (prefers-color-scheme: dark) {
     .btn-action.c-amber { color: #EF9F27; }
   }
@@ -139,7 +178,7 @@
   .log.log-tall { max-height: 380px; }
   .log div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .chart-wrap { position: relative; width: 100%; height: 130px; margin-top: 4px; }
-  .pill { display: inline-block; padding: 4px 10px; font-size: 11px; border-radius: 14px; background: var(--bg-inner); border: 1px solid var(--border); }
+  .pill { display: inline-block; padding: 4px 10px; font-size: 11px; border-radius: var(--r-lg); background: var(--bg-inner); border: 1px solid var(--border); }
   .pill.ok { background: rgba(29,158,117,0.13); color: var(--ok); border-color: rgba(29,158,117,0.3); }
   .pill.warn { background: rgba(239,159,39,0.13); color: var(--warn); border-color: rgba(239,159,39,0.3); }
   .pill.err { background: rgba(226,75,74,0.13); color: var(--err); border-color: rgba(226,75,74,0.3); }
@@ -302,19 +341,19 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="18" r="2.5"/><circle cx="12" cy="12" r="2.5"/></svg>
           Карта сети
         </button>
-        <button class="btn-action" id="btn-users" style="display:none; color: var(--text-muted); border-color: var(--border)" onclick="showUsersModal()" title="Пользователи и аудит-лог (только админ)">
+        <button class="btn-action c-mute" id="btn-users" style="display:none" onclick="showUsersModal()" title="Пользователи и аудит-лог (только админ)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
           Пользователи
         </button>
-        <button class="btn-action" id="btn-argon-help" style="display:none; color: var(--text-muted); border-color: var(--border)" onclick="showArgonHelp()">
+        <button class="btn-action c-mute" id="btn-argon-help" style="display:none" onclick="showArgonHelp()">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
           Кнопка Argon
         </button>
-        <button class="btn-action" style="color: var(--text-muted); border-color: var(--border)" onclick="showAppHelp()" title="О дашборде">
+        <button class="btn-action c-mute" onclick="showAppHelp()" title="О дашборде">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
           О дашборде
         </button>
-        <button class="btn-action" style="color: var(--text-muted); border-color: var(--border)" onclick="showVersionModal()" title="История версий и обновления">
+        <button class="btn-action c-mute" onclick="showVersionModal()" title="История версий и обновления">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6m0 8v6m-10-10h6m8 0h6"/><circle cx="12" cy="12" r="3"/></svg>
           <span>Версия <span id="hdr-version">…</span></span>
         </button>
