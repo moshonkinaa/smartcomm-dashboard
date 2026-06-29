@@ -507,9 +507,35 @@ def _primary_iface():
     return None
 
 
-@time_cache(60)
+_IFACE_CACHE = {"iface": None, "ts": 0}
+
+
 def primary_iface():
-    return _primary_iface() or "eth0"
+    """Имя интерфейса с default route. Кеш 60с ТОЛЬКО для удачного результата —
+    если default route ещё не настроен (ранний boot), повторяем каждый вызов
+    пока не найдём, чтобы избежать застревания на fallback'е."""
+    now = time.time()
+    if _IFACE_CACHE["iface"] and now - _IFACE_CACHE["ts"] < 60:
+        return _IFACE_CACHE["iface"]
+    found = _primary_iface()
+    if found:
+        _IFACE_CACHE["iface"] = found
+        _IFACE_CACHE["ts"] = now
+        return found
+    # Fallback: первый UP не-loopback интерфейс
+    try:
+        for n in sorted(os.listdir("/sys/class/net")):
+            if n == "lo":
+                continue
+            try:
+                with open(f"/sys/class/net/{n}/operstate") as f:
+                    if f.read().strip() == "up":
+                        return n
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return "eth0"
 
 
 def net_rate(iface=None):
