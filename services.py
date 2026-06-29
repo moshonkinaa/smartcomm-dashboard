@@ -44,8 +44,12 @@ SERVICES_DIR = CATALOG_DIR / "services"
 # Где хранятся данные установленных сервисов
 DATA_BASE = Path("/var/lib/smartcomm-services")
 
-# DB — берём из network.py (общая)
-DB_PATH = "/var/lib/smartcomm-dashboard/network.db"
+# DB — общая с network.py (там миграции запускаются). НЕ дублируем хардкод —
+# импортируем чтобы не было дрейфа (в v1.6.0 я случайно написала network.db
+# вместо inventory.db → installed_services создавалась но в чужой пустой БД,
+# отсюда «установлено 0» хотя сервис ставится).
+import network as _net_mod
+DB_PATH = str(_net_mod.DB_PATH)
 
 
 # ============ Catalog loading ============
@@ -262,11 +266,14 @@ def counts():
 
 def install_pre_check(service_id):
     """Проверки перед установкой: совместимость + порты + интернет.
-    Возвращает dict с list'ами ok / warnings / errors."""
+    Возвращает dict с list'ами ok / warnings / errors.
+    Если сервис УЖЕ установлен — порты-конфликты ignore'ятся (это его же порты)."""
     catalog = load_catalog()
     service = next((s for s in catalog if s.get("id") == service_id), None)
     if not service:
         return {"ok": False, "error": f"сервис '{service_id}' не найден в каталоге"}
+
+    already_installed = get_installed(service_id) is not None
 
     result = {
         "service": service.get("name"),
@@ -276,6 +283,7 @@ def install_pre_check(service_id):
         "ports_ok": True,
         "checks": [],
         "blockers": [],
+        "already_installed": already_installed,
     }
 
     reqs = service.get("requirements", {})
@@ -309,18 +317,23 @@ def install_pre_check(service_id):
     else:
         result["checks"].append(f"✓ Диск: свободно {free_disk}GB / нужно {need_disk}GB")
 
-    # Порты
-    busy_ports = _busy_ports()
+    # Порты — если сервис уже установлен, его порты он сам занимает, не проблема
     needs_ports = reqs.get("needs_ports", [])
-    busy_required = [p for p in needs_ports if p in busy_ports]
-    if busy_required:
-        result["ports_ok"] = False
-        result["blockers"].append(
-            f"Порты заняты: {', '.join(map(str, busy_required))} "
-            f"(сервис требует: {', '.join(map(str, needs_ports))})"
-        )
+    if not already_installed:
+        busy_ports = _busy_ports()
+        busy_required = [p for p in needs_ports if p in busy_ports]
+        if busy_required:
+            result["ports_ok"] = False
+            result["blockers"].append(
+                f"Порты заняты: {', '.join(map(str, busy_required))} "
+                f"(сервис требует: {', '.join(map(str, needs_ports))})"
+            )
+        elif needs_ports:
+            result["checks"].append(f"✓ Порты свободны: {', '.join(map(str, needs_ports))}")
     elif needs_ports:
-        result["checks"].append(f"✓ Порты свободны: {', '.join(map(str, needs_ports))}")
+        result["checks"].append(
+            f"✓ Порты {', '.join(map(str, needs_ports))} заняты самим сервисом (норма)"
+        )
 
     # Docker установлен?
     docker_ok = bool(shutil.which("docker"))
@@ -334,6 +347,171 @@ def install_pre_check(service_id):
         and result["disk_ok"] and result["ports_ok"] and docker_ok
     )
     return result
+
+
+# ============ Service lifecycle (start/stop/restart) ============
+
+def service_action(service_id, action):
+    """action: start | stop | restart | logs. Возвращает (ok, message_or_output)."""
+    if action not in ("start", "stop", "restart", "logs"):
+        return False, f"unknown action: {action}"
+
+    sdir = _service_dir(service_id)
+    compose_path = sdir / "compose.yml"
+    if not compose_path.exists():
+        return False, f"compose.yml не найден: {compose_path}"
+
+    if action == "logs":
+        try:
+            r = subprocess.run(
+                ["sudo", "docker", "compose", "-f", str(compose_path),
+                 "logs", "--tail", "100", "--no-color"],
+                capture_output=True, text=True, timeout=15
+            )
+            return True, r.stdout[-8000:] or r.stderr[-2000:]
+        except subprocess.TimeoutExpired:
+            return False, "timeout"
+
+    cmd = ["sudo", "docker", "compose", "-f", str(compose_path)]
+    if action == "start":
+        cmd += ["up", "-d"]
+    elif action == "stop":
+        cmd += ["stop"]
+    elif action == "restart":
+        cmd += ["restart"]
+
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if r.returncode != 0:
+            return False, f"rc={r.returncode}: {(r.stderr or r.stdout)[-500:]}"
+        new_status = {"start": "running", "restart": "running", "stop": "stopped"}.get(action, "running")
+        _db_upsert_installed(service_id, status=new_status,
+                             last_started_at=int(time.time()) if new_status == "running" else None,
+                             last_error=None)
+        return True, (r.stdout or "OK")[-500:]
+    except subprocess.TimeoutExpired:
+        return False, "timeout"
+
+
+# ============ Docker status sync + discovery existing ============
+
+def _docker_container_status(container_name):
+    """docker inspect <name> --format '{{.State.Status}}'. None если нет."""
+    try:
+        r = subprocess.run(
+            ["sudo", "docker", "inspect", "--format={{.State.Status}}", container_name],
+            capture_output=True, text=True, timeout=5
+        )
+        if r.returncode == 0:
+            return r.stdout.strip()
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return None
+
+
+def _all_docker_containers():
+    """Возвращает [{name, status, image, ports}, ...] всех контейнеров."""
+    try:
+        r = subprocess.run(
+            ["sudo", "docker", "ps", "-a", "--format",
+             "{{.Names}}|{{.State}}|{{.Image}}|{{.Ports}}"],
+            capture_output=True, text=True, timeout=10
+        )
+        if r.returncode != 0:
+            return []
+        out = []
+        for ln in r.stdout.splitlines():
+            parts = ln.split("|", 3)
+            if len(parts) == 4:
+                out.append({"name": parts[0], "state": parts[1],
+                            "image": parts[2], "ports": parts[3]})
+        return out
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return []
+
+
+def sync_statuses():
+    """Обновляет статусы installed_services из docker inspect. Раз в 30 сек."""
+    installed = list_installed()
+    for inst in installed:
+        sid = inst["id"]
+        compose_path = _service_dir(sid) / "compose.yml"
+        if not compose_path.exists():
+            continue
+        # Парсим имена контейнеров из compose.yml (наивно — container_name: lines)
+        try:
+            text = compose_path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        names = re.findall(r"container_name:\s*([^\s\n]+)", text)
+        if not names:
+            # без container_name docker compose использует <project>-<service>-1
+            names = [f"{sid}-{sid}-1"]  # best-effort
+        statuses = [_docker_container_status(n) for n in names]
+        statuses = [s for s in statuses if s]
+        # Aggregate: если все running → running, иначе если есть exited/dead → error,
+        # иначе stopped
+        if statuses and all(s == "running" for s in statuses):
+            new_status = "running"
+        elif statuses and any(s in ("dead", "exited") for s in statuses):
+            new_status = "stopped"   # exited — это нормальный stop, не error
+        elif not statuses:
+            new_status = "error"     # контейнер исчез
+        else:
+            new_status = "stopped"
+        if new_status != inst.get("status"):
+            _db_upsert_installed(sid, status=new_status)
+
+
+def discover_existing():
+    """При старте: ищет installed сервисы в /var/lib/smartcomm-services/*/compose.yml
+    которые НЕ в БД (потеря после bug в v1.6.0) — регистрирует их.
+    Безопасно: только тех чьи compose.yml существуют физически."""
+    if not DATA_BASE.exists():
+        return 0
+    catalog_ids = {s.get("id") for s in load_catalog()}
+    found = 0
+    for entry in DATA_BASE.iterdir():
+        if not entry.is_dir() or entry.name.startswith("_"):
+            continue
+        if entry.name not in catalog_ids:
+            continue
+        if not (entry / "compose.yml").exists():
+            continue
+        if get_installed(entry.name):
+            continue   # уже в БД
+        # Регистрируем — статус определим через sync_statuses сразу после
+        _db_upsert_installed(entry.name, status="installed",
+                             catalog_version="1")
+        found += 1
+    if found:
+        sync_statuses()
+    return found
+
+
+# ============ Background status sampler ============
+
+def _status_sampler_loop():
+    """Раз в 30 сек обновляем статусы installed-сервисов из docker inspect."""
+    while True:
+        try:
+            sync_statuses()
+        except Exception as e:
+            print(f"[services-sampler] error: {e}")
+        time.sleep(30)
+
+
+_SAMPLER_STARTED = False
+
+
+def ensure_sampler_started():
+    """Запускает background sampler один раз. Безопасно дёргать многократно."""
+    global _SAMPLER_STARTED
+    if _SAMPLER_STARTED:
+        return
+    _SAMPLER_STARTED = True
+    threading.Thread(target=_status_sampler_loop, daemon=True,
+                     name="services-status-sampler").start()
 
 
 def _busy_ports():

@@ -394,11 +394,9 @@ async function openServiceModal(id) {
       <pre class="post-install">${escapeHtml(svc.post_install)}</pre>
     </div>` : ''}
     ${svc.docs_url ? `<a class="docs-link" href="${escapeHtml(svc.docs_url)}" target="_blank" rel="noopener">📖 Документация ↗</a>` : ''}
-    <div class="modal-actions">
+    <div class="modal-actions" style="flex-wrap:wrap">
       <button class="btn-close" onclick="closeModal()">Закрыть</button>
-      ${svc._installed
-        ? `<button class="btn-action" style="background:rgba(226,75,74,0.12);color:var(--err);border-color:rgba(226,75,74,0.4)" onclick="uninstallService('${escapeHtml(svc.id)}', ${JSON.stringify(svc.name)})">🗑 Удалить</button>`
-        : `<button class="btn-primary" id="install-btn" disabled onclick="installService('${escapeHtml(svc.id)}')">Установить</button>`}
+      ${svc._installed ? renderInstalledActions(svc) : `<button class="btn-primary" id="install-btn" disabled onclick="installService('${escapeHtml(svc.id)}')">Установить</button>`}
     </div>`;
   document.getElementById('svc-modal').classList.add('show');
   // Параллельно дёргаем pre-check
@@ -429,6 +427,80 @@ async function loadPreCheck(id) {
     }
   } catch (e) {
     sect.innerHTML = '<h3>Проверка перед установкой</h3><div class="text-err">Ошибка: ' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+function renderInstalledActions(svc) {
+  const inst = svc._installed;
+  const isRunning = inst && inst.status === 'running';
+  const webUrl = (svc.web_url || '').replace('{CONTROLLER}', location.hostname);
+  const parts = [];
+  if (webUrl) {
+    parts.push(`<a class="btn-primary" style="text-decoration:none;background:var(--info);border-color:var(--info)" href="${escapeHtml(webUrl)}" target="_blank" rel="noopener">🔗 Открыть</a>`);
+  }
+  parts.push(`<button class="btn-action" onclick="showServiceLogs('${escapeHtml(svc.id)}')">📜 Логи</button>`);
+  if (isRunning) {
+    parts.push(`<button class="btn-action" onclick="serviceAction('${escapeHtml(svc.id)}','restart')">↻ Перезапустить</button>`);
+    parts.push(`<button class="btn-action" style="color:var(--warn);border-color:rgba(239,159,39,0.4)" onclick="serviceAction('${escapeHtml(svc.id)}','stop')">⏸ Остановить</button>`);
+  } else {
+    parts.push(`<button class="btn-action" style="color:var(--ok);border-color:rgba(29,158,117,0.4)" onclick="serviceAction('${escapeHtml(svc.id)}','start')">▶ Запустить</button>`);
+  }
+  parts.push(`<button class="btn-action" style="background:rgba(226,75,74,0.12);color:var(--err);border-color:rgba(226,75,74,0.4)" onclick="uninstallService('${escapeHtml(svc.id)}', ${JSON.stringify(svc.name)})">🗑 Удалить</button>`);
+  return parts.join('');
+}
+
+async function serviceAction(id, action) {
+  const labels = {start: 'Запускаю', stop: 'Останавливаю', restart: 'Перезапускаю'};
+  showToast((labels[action] || action) + '...');
+  try {
+    const r = await fetch('/api/services/' + encodeURIComponent(id) + '/action', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({action})
+    });
+    const j = await r.json();
+    if (!j.ok) {
+      showToast('Ошибка ' + action + ': ' + (j.output || j.error || '?'), true);
+      return;
+    }
+    showToast({start: 'Запущен', stop: 'Остановлен', restart: 'Перезапущен'}[action]);
+    // Refresh каталог чтобы статус-badge обновился
+    await loadCatalog();
+    // Reopen modal с актуальным state
+    setTimeout(() => openServiceModal(id), 200);
+  } catch (e) {
+    showToast('Сетевая ошибка: ' + e.message, true);
+  }
+}
+
+async function showServiceLogs(id) {
+  const svc = _catalog.find(s => s.id === id);
+  if (!svc) return;
+  const body = document.getElementById('svc-modal-body');
+  body.innerHTML = `
+    <div class="modal-head">
+      <div class="modal-icon">📜</div>
+      <div style="flex:1">
+        <h2 class="modal-title">Логи ${escapeHtml(svc.name)}</h2>
+        <p class="modal-tag">docker compose logs --tail 100</p>
+      </div>
+    </div>
+    <div class="modal-section">
+      <pre class="post-install" id="svc-logs" style="max-height:420px;overflow-y:auto;font-size:11px">Загрузка...</pre>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-close" onclick="openServiceModal('${escapeHtml(id)}')">← Назад</button>
+      <button class="btn-action" onclick="showServiceLogs('${escapeHtml(id)}')">↻ Обновить</button>
+    </div>`;
+  document.getElementById('svc-modal').classList.add('show');
+  try {
+    const r = await fetch('/api/services/' + encodeURIComponent(id) + '/logs');
+    const j = await r.json();
+    const pre = document.getElementById('svc-logs');
+    pre.textContent = j.ok ? (j.logs || '(пусто)') : 'Ошибка: ' + (j.error || '?');
+    pre.scrollTop = pre.scrollHeight;
+  } catch (e) {
+    document.getElementById('svc-logs').textContent = 'Сетевая ошибка: ' + e.message;
   }
 }
 
@@ -559,9 +631,20 @@ async function pollProgress(id, action) {
         showToast('Ошибка: ' + (j.error || '?'), true);
       } else {
         showToast((action === 'install' ? 'Установлено!' : 'Удалено!'));
-        // Refresh каталог чтобы badge обновился
         await loadCatalog();
         servicesCountsLoad();
+        // Если install успешен — показать кнопку «Открыть портал»
+        if (action === 'install') {
+          const svc = _catalog.find(s => s.id === id);
+          if (svc && svc.web_url) {
+            const webUrl = svc.web_url.replace('{CONTROLLER}', location.hostname);
+            const actions = document.querySelector('#svc-modal-body .modal-actions');
+            if (actions) {
+              actions.insertAdjacentHTML('afterbegin',
+                `<a class="btn-primary" style="text-decoration:none;background:var(--ok);border-color:var(--ok)" href="${escapeHtml(webUrl)}" target="_blank" rel="noopener">🔗 Открыть ${escapeHtml(svc.name)}</a>`);
+            }
+          }
+        }
       }
     }
   } catch (_) { /* пропускаем */ }

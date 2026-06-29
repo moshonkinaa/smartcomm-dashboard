@@ -104,7 +104,7 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "1.6.1"
+VERSION = "1.7.0"
 RELEASE_DATE = "2026-06-27"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # Минимальная версия клиента (PWA/cache) с которой backend ещё совместим.
@@ -1966,6 +1966,25 @@ def api_services_install_progress(service_id):
     return jsonify({"ok": True, **p})
 
 
+@app.route("/api/services/<service_id>/action", methods=["POST"])
+@requires_admin
+@audit_action("service_action", target_from_path=True)
+def api_services_action(service_id):
+    """Лайфцикл: start/stop/restart. Body: {action: start|stop|restart}."""
+    data = request.get_json(silent=True) or {}
+    action = data.get("action", "")
+    ok, msg = services_mod.service_action(service_id, action)
+    return jsonify({"ok": ok, "action": action, "output": msg}), (200 if ok else 400)
+
+
+@app.route("/api/services/<service_id>/logs")
+@requires_auth
+def api_services_logs(service_id):
+    """Последние 100 строк `docker compose logs`."""
+    ok, msg = services_mod.service_action(service_id, "logs")
+    return jsonify({"ok": ok, "logs": msg if ok else "", "error": msg if not ok else None})
+
+
 @app.route("/api/changelog")
 def api_changelog():
     """Отдаёт CHANGELOG.md как текст (для модалки версий).
@@ -2264,6 +2283,15 @@ def _auth_cleanup_loop():
 threading.Thread(target=_auth_cleanup_loop, daemon=True).start()
 # Updater — раз в час чекает GitHub Releases, log про доступные обновления
 threading.Thread(target=_update_check_loop, daemon=True).start()
+
+# Services: discover existing installations (compensate v1.6.0 БД bug) + start sampler
+try:
+    found = services_mod.discover_existing()
+    if found:
+        print(f"[services] discovered {found} previously-installed services")
+    services_mod.ensure_sampler_started()
+except Exception as e:
+    print(f"[services] init warn: {e}")
 
 
 if __name__ == "__main__":
