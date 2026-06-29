@@ -128,9 +128,46 @@ python3 -m py_compile "$APP_DIR/dashboard.py" && echo "  dashboard.py — OK"
 python3 -m py_compile "$APP_DIR/network.py"   && echo "  network.py — OK"
 python3 -m py_compile "$APP_DIR/mikrotik.py"  && echo "  mikrotik.py — OK"
 
-# ===== 6. Systemd =====
+# ===== 6. Platform-specific fixes (опциональные, по DMI vendor/product) =====
+# База: blacklist Intel DPTF на MSI Cubi 5 — там BIOS-баг с _SB.PC00.SEN1._TMP.MPAG
+# каждые ~10с генерит "ACPI BIOS Error". int3400_thermal family дёргает битые
+# методы. Coretemp (MSR) и BIOS fan-control продолжают работать без них.
 echo ""
-echo "[6/6] Systemd unit + старт"
+echo "[6/7] Platform-specific fixes"
+DMI_VENDOR="$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null || echo unknown)"
+DMI_PRODUCT="$(cat /sys/class/dmi/id/product_name 2>/dev/null || echo unknown)"
+echo "  hardware: $DMI_VENDOR / $DMI_PRODUCT"
+
+if [[ "$DMI_VENDOR" == *"Micro-Star"* ]] && [[ "$DMI_PRODUCT" == *"Cubi"* ]]; then
+  BLFILE="/etc/modprobe.d/blacklist-int3400.conf"
+  if [ -f "$BLFILE" ]; then
+    echo "  ✓ MSI Cubi — int3400 blacklist уже применён ($BLFILE)"
+  else
+    echo "  → MSI Cubi обнаружен — применяю ACPI int3400 blacklist (см. CHANGELOG v1.4.3+)"
+    cat > "$BLFILE" <<EOF
+# Auto-applied by smartcomm-dashboard installer for MSI $DMI_PRODUCT.
+# Reason: MSI BIOS has missing ACPI symbol _SB.PC00.SEN1._TMP.MPAG which
+# causes "ACPI BIOS Error" every ~10s. Intel DPTF drivers below dereference
+# those missing symbols. Blacklisting stops the noise.
+# Safe: CPU temp continues via coretemp (MSR), fan control continues via BIOS.
+blacklist int3400_thermal
+blacklist int340x_thermal_zone
+blacklist int3402_thermal
+blacklist int3403_thermal
+blacklist intel_pch_thermal
+EOF
+    chmod 644 "$BLFILE"
+    update-initramfs -u 2>&1 | tail -1
+    PLATFORM_NEEDS_REBOOT=1
+    echo "  ⚠ blacklist применится после reboot — добавлю напоминание в финале"
+  fi
+else
+  echo "  (нет известных платформенных фиксов для этого hardware — skip)"
+fi
+
+# ===== 7. Systemd =====
+echo ""
+echo "[7/7] Systemd unit + старт"
 cp "$SRC_DIR/$SVC_FILE" "/etc/systemd/system/$SVC_FILE"
 # Если хочешь другого юзера, заменяем User=/Group= в unit'е
 if [ "$SVC_USER" != "pi" ]; then
@@ -175,4 +212,10 @@ echo ""
 echo "  Логи:     sudo journalctl -u smartcomm-dashboard -f"
 echo "  Рестарт:  sudo systemctl restart smartcomm-dashboard"
 echo "  Стоп:     sudo systemctl stop smartcomm-dashboard"
+if [ "${PLATFORM_NEEDS_REBOOT:-0}" = "1" ]; then
+  echo ""
+  echo "  ⚠ Применён платформенный фикс (blacklist int3400) — нужен REBOOT для"
+  echo "    применения, чтобы исчезли ACPI BIOS errors из dmesg:"
+  echo "       sudo systemctl reboot"
+fi
 echo "================================================================"

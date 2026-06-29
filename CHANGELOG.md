@@ -2,6 +2,26 @@
 
 Все значимые изменения проекта. Формат — Keep a Changelog + SemVer.
 
+## 1.4.4 — 2026-06-30
+
+`install.sh` теперь применяет платформенные фиксы автоматически по DMI vendor+product.
+
+### Added — auto-blacklist Intel DPTF на MSI Cubi
+Новый шаг **`[6/7] Platform-specific fixes`** в `install.sh`:
+- Читает `/sys/class/dmi/id/sys_vendor` и `/product_name`
+- Если **vendor=`*Micro-Star*` и product=`*Cubi*`** — создаёт `/etc/modprobe.d/blacklist-int3400.conf` с blacklist'ом `int3400_thermal` / `int340x_thermal_zone` / `int3402/3_thermal` / `intel_pch_thermal`
+- Делает `update-initramfs -u`
+- В финальном сообщении напоминает что нужен reboot
+- Идемпотентно — если файл уже есть, не трогает
+
+### Why
+В v1.4.3 я (вручную) применила blacklist на конкретно нашем Cubi и это убрало 90% ACPI BIOS errors (40 → 4-6). Чтобы каждый новый MSI Cubi, который инсталлятор будет ставить у клиентов, **сразу** разворачивался чистым — а не повторял ручную процедуру — закрепил это в installer'е. Это первый «platform-specific quirk» в installer'е — задел под расширение (Intel NUC, AMD mini-PC и пр. могут иметь свои фиксы).
+
+### Что важно
+- На Pi и не-MSI hardware скрипт ничего не делает — просто говорит "(нет известных платформенных фиксов для этого hardware)"
+- Безопасно: coretemp (через MSR) и fan control (через BIOS) продолжают работать после blacklist
+- В CHANGELOG.md в плитке «Версия» теперь видны все три новых хотфикса v1.4.x (после v1.4.2 фикса с CHANGELOG)
+
 ## 1.4.3 — 2026-06-29
 
 Фильтр известного firmware-шума в плитке «dmesg ошибки».
