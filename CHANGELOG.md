@@ -2,6 +2,37 @@
 
 Все значимые изменения проекта. Формат — Keep a Changelog + SemVer.
 
+## 1.4.0 — 2026-06-29
+
+**Multi-platform support** — дашборд теперь работает не только на Raspberry Pi, но и на x86 (Intel/AMD неттопы). Связано с разворачиванием первого production-контроллера MSI Cubi 5.
+
+### Fixed — На x86 теперь работают
+- **Температура CPU** — раньше `vcgencmd measure_temp` (Pi-only) → `None` на x86. Теперь fallback на `/sys/class/hwmon/*/coretemp` → Package id 0 (или первый Core). На Pi работает как раньше через vcgencmd.
+- **Частота CPU** — раньше `vcgencmd measure_clock arm` → `None`. Теперь fallback на `/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq`.
+- **Сетевой интерфейс** — раньше хардкод `eth0` → 0 байт на любой машине где первый интерфейс называется иначе (Cubi: `enp45s0`, Debian-Predictable-Names в общем). Теперь auto-detect через default route в `/proc/net/route`, кеш 60 сек.
+- **Throttle status** — раньше `vcgencmd get_throttled` падал → broken JSON. Теперь возвращает пустой контракт (всё False, raw=0x0) на x86 — фронт не падает.
+
+### Changed
+- Плитка «Сеть» теперь динамически показывает реальное имя интерфейса (`Сеть eth0` на Pi, `Сеть enp45s0` на Cubi)
+- API `/api/status` поле `net.iface` теперь возвращает реальный primary interface, не хардкод
+- Voltage tile (`voltage_v` в API) на x86 возвращает None — фронт-логика покажет «—» (нет аналога vcgencmd на x86)
+
+### Added — Detection helper
+- Константа `_HAS_VCGENCMD = shutil.which("vcgencmd") is not None` — единая точка определения платформы
+- Функция `primary_iface()` с кешем 60 сек — для определения активного сетевого интерфейса
+- Функция `_cpu_temp_x86()` — корректное чтение coretemp через hwmon, предпочитает Package id 0
+
+### Why
+SmartComm Dashboard позиционируется как продукт для тиражирования по объектам клиентов. Production-контроллер — это **MSI Cubi 5** (x86 Intel), а не Pi. На Cubi дашборд показывал:
+- «Нет температуры ЦПУ» (vcgencmd отсутствует)
+- «Сеть eth0: ↓0 ↑0» (eth0 не существует, активный enp45s0)
+- Заглушки в throttle/voltage
+
+После этого релиза дашборд корректно работает на **обоих платформах** без правки конфигов — автоопределение.
+
+### Совместимость
+Полностью backward-compatible с Pi 5. На Pi всё работает как раньше (vcgencmd ветка), на x86 — fallback срабатывает прозрачно. Никаких настроек/миграций не требуется.
+
 ## 1.3.1 — 2026-06-27
 
 CSS-housekeeping: utility-классы + design tokens.

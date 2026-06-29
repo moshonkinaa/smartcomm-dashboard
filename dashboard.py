@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -102,7 +103,7 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "1.3.1"
+VERSION = "1.4.0"
 RELEASE_DATE = "2026-06-27"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # Минимальная версия клиента (PWA/cache) с которой backend ещё совместим.
@@ -277,29 +278,92 @@ def sh(cmd, timeout=5):
         return ""
 
 
+_HAS_VCGENCMD = shutil.which("vcgencmd") is not None
+
+
 def vcgen(arg):
     return sh(f"vcgencmd {arg}")
 
 
+def _cpu_temp_x86():
+    """x86 fallback: читает /sys/class/hwmon/hwmon*/ где name=coretemp,
+    возвращает Package id 0 (или первый Core если Package недоступен)."""
+    try:
+        for h in sorted(os.listdir("/sys/class/hwmon")):
+            base = f"/sys/class/hwmon/{h}"
+            try:
+                with open(f"{base}/name") as f:
+                    if f.read().strip() != "coretemp":
+                        continue
+            except OSError:
+                continue
+            package_temp = first_temp = None
+            for fn in sorted(os.listdir(base)):
+                if not (fn.startswith("temp") and fn.endswith("_input")):
+                    continue
+                idx = fn[4:-6]
+                try:
+                    with open(f"{base}/temp{idx}_label") as f:
+                        label = f.read().strip()
+                    with open(f"{base}/temp{idx}_input") as f:
+                        val_c = int(f.read().strip()) / 1000.0
+                except (OSError, ValueError):
+                    continue
+                if label.startswith("Package") and package_temp is None:
+                    package_temp = val_c
+                elif first_temp is None:
+                    first_temp = val_c
+            if package_temp is not None:
+                return round(package_temp, 1)
+            if first_temp is not None:
+                return round(first_temp, 1)
+    except OSError:
+        pass
+    return None
+
+
 def cpu_temp_c():
-    o = vcgen("measure_temp")
-    m = re.search(r"=([\d.]+)", o)
-    return float(m.group(1)) if m else None
+    """Pi: vcgencmd; x86: coretemp via hwmon (Package id 0)."""
+    if _HAS_VCGENCMD:
+        o = vcgen("measure_temp")
+        m = re.search(r"=([\d.]+)", o)
+        return float(m.group(1)) if m else None
+    return _cpu_temp_x86()
 
 
 def cpu_freq_mhz():
-    o = vcgen("measure_clock arm")
-    m = re.search(r"=(\d+)", o)
-    return int(m.group(1)) // 1_000_000 if m else None
+    """Pi: vcgencmd; x86: cpufreq scaling_cur_freq (kHz → MHz)."""
+    if _HAS_VCGENCMD:
+        o = vcgen("measure_clock arm")
+        m = re.search(r"=(\d+)", o)
+        return int(m.group(1)) // 1_000_000 if m else None
+    try:
+        with open("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq") as f:
+            return int(f.read().strip()) // 1000
+    except (OSError, ValueError):
+        return None
 
 
 def core_volt_v():
+    """Pi: vcgencmd; x86: нет аналога (тут не реализуем — фронт скроет плитку)."""
+    if not _HAS_VCGENCMD:
+        return None
     o = vcgen("measure_volts core")
     m = re.search(r"=([\d.]+)", o)
     return float(m.group(1)) if m else None
 
 
 def throttled():
+    """Pi: get_throttled bitmask; x86: no-op (всё False, raw=0x0).
+    Возвращает тот же контракт чтобы фронт не падал."""
+    empty = {
+        "undervolt_now": False, "freq_capped_now": False,
+        "throttled_now": False, "soft_temp_now": False,
+        "undervolt_ever": False, "freq_capped_ever": False,
+        "throttled_ever": False, "soft_temp_ever": False,
+    }
+    if not _HAS_VCGENCMD:
+        return "0x0", empty
     o = vcgen("get_throttled")
     m = re.search(r"=(0x[\da-fA-F]+)", o)
     raw = m.group(1) if m else "0x0"
@@ -428,13 +492,36 @@ def disk_info(path="/"):
         return {"total": 0, "used": 0, "percent": 0}
 
 
-def net_rate(iface="eth0"):
+def _primary_iface():
+    """Имя интерфейса с default route. Кешируется на 60 сек.
+    Pi обычно eth0, Cubi — enp45s0 и т.п."""
+    try:
+        with open("/proc/net/route") as f:
+            next(f)
+            for ln in f:
+                parts = ln.split()
+                if len(parts) >= 4 and parts[1] == "00000000":
+                    return parts[0]
+    except OSError:
+        pass
+    return None
+
+
+@time_cache(60)
+def primary_iface():
+    return _primary_iface() or "eth0"
+
+
+def net_rate(iface=None):
     global PREV_NET
+    if iface is None:
+        iface = primary_iface()
     try:
         with open("/proc/net/dev") as f:
             for ln in f:
-                if iface in ln:
-                    fields = ln.split(":")[1].split()
+                lhs = ln.split(":", 1)
+                if len(lhs) == 2 and lhs[0].strip() == iface:
+                    fields = lhs[1].split()
                     rx, tx = int(fields[0]), int(fields[8])
                     now = time.time()
                     dt = max(0.5, now - PREV_NET["ts"])
@@ -1355,7 +1442,7 @@ def api_status():
         "voltage_v": core_volt_v(),
         "throttle": {"raw": throt_raw, "flags": throt},
         "net": {
-            "iface": "eth0",
+            "iface": primary_iface(),
             "rx_rate": rx_rate, "tx_rate": tx_rate,
             "rx_total": rx_total, "tx_total": tx_total,
         },

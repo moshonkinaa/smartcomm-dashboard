@@ -488,7 +488,7 @@
       </div>
     </div>
     <div class="card">
-      <p class="card-title">Контроллер · Сеть eth0</p>
+      <p class="card-title">Контроллер · <span id="net-iface-name">Сеть</span></p>
       <p class="card-value" id="net">—</p>
       <p class="card-sub" id="net-sub">—</p>
       <div class="spark" id="spark-net"></div>
@@ -1397,6 +1397,7 @@ async function loadStatus() {
 
     document.getElementById('net').textContent = '↓' + fmtRateCompact(d.net.rx_rate) + ' ↑' + fmtRateCompact(d.net.tx_rate);
     document.getElementById('net-sub').textContent = 'всего ↓ ' + fmtBytes(d.net.rx_total) + ' ↑ ' + fmtBytes(d.net.tx_total);
+    if (d.net.iface) document.getElementById('net-iface-name').textContent = 'Сеть ' + d.net.iface;
 
     const ii = d.iridium_info || {};
     if (ii.version) {
