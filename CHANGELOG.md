@@ -2,6 +2,52 @@
 
 Все значимые изменения проекта. Формат — Keep a Changelog + SemVer.
 
+## 2.0.0 — 2026-06-30
+
+**🎉 MAJOR — Магазин Phase 4: пакеты «Базовый/Стандарт/Премиум» + ресурсы live + заметки. Конец построения магазина.**
+
+### Added — Готовые пакеты (Profiles)
+Новый раздел в каталоге `smartcomm-services-catalog/profiles/` с 3 пакетами:
+- **🟢 Базовый** (~1000 ₽/мес ценность, 600 MB RAM) — AdGuard + Vaultwarden + Uptime Kuma. Для семей в загородных домах
+- **🔵 Стандарт** (~3500 ₽/мес, 6.5 GB RAM) — Базовый + 3X-UI + AmneziaWG + Nextcloud + n8n. Активные пользователи
+- **🟣 Премиум** (~8000 ₽/мес, 18 GB RAM) — Стандарт + Ollama + Jellyfin + Immich + Frigate. Только мощные неттопы (Cubi 5 16GB+)
+
+На странице `/services` сверху появилась секция «📦 Готовые пакеты» с 3 большими карточками. Progress bar показывает сколько из пакета уже стоит. Один клик — install всех недостающих сервисов последовательно (worker-thread с общим progress log).
+
+### Added — Resource usage live (docker stats)
+- Background sampler раз в 30с `docker stats --no-stream --format` → CPU%, MEM MiB, MEM%, NET RX/TX → in-memory `_STATS` dict
+- В карточке installed-сервиса бейдж **«⚡ 0.4% · 145M»** (CPU · RAM)
+- В модалке installed-сервиса — 4 stat-плитки: CPU, RAM, Net RX, Net TX
+- Aggregate если у сервиса несколько контейнеров (Immich/Nextcloud — multi-container)
+- API: `GET /api/services/<id>/stats`, поле `_stats` в catalog response
+
+### Added — Notes per service + auto_update
+В модалке installed-сервиса:
+- **📝 Заметки админа** — textarea (до 2000 chars). Например «Установлено для клиента ИП Иванов, оплачено до 15.11.2026». Сохраняется в БД (`installed_services.notes`).
+- **🔄 Автообновление** select: never (default) / weekly / monthly. Сохраняется в `auto_update`. *(Сам cron-pull в v2.1 — пока settings UI готов, фоновый updater подключим следующим релизом.)*
+- API: `PATCH /api/services/<id>/settings` body `{notes, auto_update}`
+
+### Fixed — dubious ownership при «Обновить каталог»
+- `git pull` падал с `fatal: detected dubious ownership` (git 2.x security): каталог owned root, flask-процесс под service-user.
+- Фикс: все git-команды в `refresh_catalog()` и `catalog_status()` теперь через `sudo git -c safe.directory=*` — обходим check без записи в `/etc/gitconfig` (опасно для всей системы).
+- Также `git pull` заменён на `fetch + reset --hard origin/main` — устойчивее к локальным изменениям файлов (если кто-то отредактировал YAML вручную через SSH).
+
+### API эндпоинты добавленные в v2.0.0
+- `GET /api/services/profiles` — список пакетов с installed_count/total
+- `POST /api/services/profiles/<id>/install` — batch-установка пакета (admin + audit)
+- `GET /api/services/<id>/stats` — live ресурсы
+- `PATCH /api/services/<id>/settings` — notes + auto_update
+
+### Why MAJOR версия
+v1.0.0 → v2.0.0 это закрытие большого rotation:
+- v1.0-1.4: dashboard core + multi-platform + bug fixes
+- v1.5: каталог + UI (Phase 0+1)
+- v1.6: install/uninstall (Phase 2)
+- v1.7: лайфцикл (Phase 3)
+- v2.0: пакеты + ресурсы + админ-инструменты (Phase 4)
+
+Магазин теперь **production-ready** для тиражирования по клиентам. Дальше — v2.1+ это уже эволюция (auto-update cron, backup management UI, Telegram-нотификации).
+
 ## 1.7.0 — 2026-06-30
 
 **Магазин Phase 3 — лайфцикл сервисов + критический фикс БД.** После установки сервиса теперь видно что он установлен, можно открыть его портал, остановить, перезапустить, посмотреть логи.

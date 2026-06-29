@@ -104,7 +104,7 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "1.7.0"
+VERSION = "2.0.0"
 RELEASE_DATE = "2026-06-27"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # Минимальная версия клиента (PWA/cache) с которой backend ещё совместим.
@@ -1890,6 +1890,7 @@ def api_services_catalog():
         item["_compatible"] = compatible
         item["_incompat_reason"] = None if compatible else reason
         item["_installed"] = installed_map.get(svc["id"])  # None или dict
+        item["_stats"] = services_mod.get_service_stats(svc["id"]) if item["_installed"] else None
         items.append(item)
     return jsonify({
         "ok": True,
@@ -1983,6 +1984,57 @@ def api_services_logs(service_id):
     """Последние 100 строк `docker compose logs`."""
     ok, msg = services_mod.service_action(service_id, "logs")
     return jsonify({"ok": ok, "logs": msg if ok else "", "error": msg if not ok else None})
+
+
+@app.route("/api/services/<service_id>/settings", methods=["PATCH"])
+@requires_admin
+@audit_action("service_settings_update", target_from_path=True)
+def api_services_settings(service_id):
+    """Обновить notes / auto_update. Body: {notes?, auto_update?}"""
+    data = request.get_json(silent=True) or {}
+    ok, msg = services_mod.update_settings(
+        service_id,
+        notes=data.get("notes"),
+        auto_update=data.get("auto_update")
+    )
+    return jsonify({"ok": ok, "message": msg}), (200 if ok else 400)
+
+
+@app.route("/api/services/<service_id>/stats")
+@requires_auth
+def api_services_stats(service_id):
+    """CPU/MEM/NET — обновляется sampler'ом раз в 30с."""
+    s = services_mod.get_service_stats(service_id)
+    if not s:
+        return jsonify({"ok": False, "message": "stats not available yet (sampler runs every 30s)"})
+    return jsonify({"ok": True, **s})
+
+
+@app.route("/api/services/profiles")
+@requires_auth
+def api_services_profiles():
+    """Список профилей-пакетов с флагами совместимости."""
+    profiles = services_mod.load_profiles()
+    installed_map = {s["id"]: s for s in services_mod.list_installed()}
+    items = []
+    for p in profiles:
+        svc_ids = p.get("services", [])
+        installed_in_profile = [sid for sid in svc_ids if sid in installed_map]
+        item = dict(p)
+        item["_installed_count"] = len(installed_in_profile)
+        item["_total_services"] = len(svc_ids)
+        item["_ready"] = len(installed_in_profile) == len(svc_ids) and svc_ids
+        items.append(item)
+    return jsonify({"ok": True, "profiles": items})
+
+
+@app.route("/api/services/profiles/<profile_id>/install", methods=["POST"])
+@requires_admin
+@audit_action("profile_install", target_from_path=True)
+def api_services_profile_install(profile_id):
+    """Запускает batch-установку всех сервисов профиля."""
+    ok, msg = services_mod.install_profile(profile_id)
+    return jsonify({"ok": ok, "message": msg, "profile_id": profile_id}), (200 if ok else 400)
 
 
 @app.route("/api/changelog")

@@ -158,6 +158,14 @@
   <!-- заполняется JS -->
 </div>
 
+<!-- Пакеты «Базовый/Стандарт/Премиум» -->
+<div id="profiles-section" style="margin-bottom: 14px;">
+  <h2 style="margin: 0 0 8px; font-size: 14px; font-weight: 500; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;">📦 Готовые пакеты — установка в один клик</h2>
+  <div id="profiles" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px;">
+    <div style="padding: 20px; color: var(--text-muted); text-align: center;">Загрузка…</div>
+  </div>
+</div>
+
 <div class="filters">
   <input type="search" class="search" id="search" placeholder="🔍 Поиск по сервисам..." oninput="renderCatalog()">
   <span class="chip active" data-cat="all" onclick="filterCat('all')">Все</span>
@@ -346,8 +354,8 @@ function cardHtml(s) {
       <p class="card-desc">${escapeHtml((s.description || '').split('\n')[0].slice(0, 120))}</p>
       <div class="card-meta">
         <span class="badge cat cat-${escapeHtml(s.category)}">${escapeHtml(s.category)}</span>
-        ${ramGb ? `<span class="badge">${ramGb}</span>` : ''}
-        ${diskGb ? `<span class="badge">${diskGb}</span>` : ''}
+        ${s._stats ? `<span class="badge" title="live resource usage">⚡ ${s._stats.cpu_pct}% · ${s._stats.mem_mb >= 1024 ? (s._stats.mem_mb/1024).toFixed(1)+'G' : Math.round(s._stats.mem_mb)+'M'}</span>` : (ramGb ? `<span class="badge">${ramGb}</span>` : '')}
+        ${!s._stats && diskGb ? `<span class="badge">${diskGb}</span>` : ''}
         ${statusBadge}
       </div>
     </div>`;
@@ -388,6 +396,29 @@ async function openServiceModal(id) {
       <h3>Проверка перед установкой</h3>
       <div class="text-muted fs-sm">Проверяю совместимость…</div>
     </div>
+    ${svc._installed && svc._stats ? `
+    <div class="modal-section">
+      <h3>Ресурсы (live, обновление 30с)</h3>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px">
+        <div class="stat"><div class="stat-val">${svc._stats.cpu_pct}%</div><div class="stat-label">CPU</div></div>
+        <div class="stat"><div class="stat-val">${svc._stats.mem_mb >= 1024 ? (svc._stats.mem_mb/1024).toFixed(1) + ' GB' : Math.round(svc._stats.mem_mb) + ' MB'}</div><div class="stat-label">RAM (${svc._stats.mem_pct}%)</div></div>
+        <div class="stat"><div class="stat-val">${svc._stats.net_rx_mb.toFixed(1)} MB</div><div class="stat-label">Net RX</div></div>
+        <div class="stat"><div class="stat-val">${svc._stats.net_tx_mb.toFixed(1)} MB</div><div class="stat-label">Net TX</div></div>
+      </div>
+    </div>` : ''}
+    ${svc._installed ? `
+    <div class="modal-section">
+      <h3>Настройки</h3>
+      <label style="display:block;margin-bottom:4px;font-size:12px;color:var(--text-muted)">📝 Заметки (для админа — клиент, оплата, контакты)</label>
+      <textarea id="svc-notes" class="search" style="width:100%;min-height:60px;font-family:inherit;resize:vertical;margin-bottom:10px" placeholder="Например: «Установлено для клиента ИП Иванов, оплачено до 15.11.2026»">${escapeHtml(svc._installed.notes || '')}</textarea>
+      <label style="display:block;margin-bottom:4px;font-size:12px;color:var(--text-muted)">🔄 Автообновление образов</label>
+      <select id="svc-auto-update" class="search" style="width:100%">
+        <option value="never" ${(svc._installed.auto_update || 'never') === 'never' ? 'selected' : ''}>Никогда (вручную)</option>
+        <option value="weekly" ${svc._installed.auto_update === 'weekly' ? 'selected' : ''}>Раз в неделю</option>
+        <option value="monthly" ${svc._installed.auto_update === 'monthly' ? 'selected' : ''}>Раз в месяц</option>
+      </select>
+      <button class="btn-action" style="margin-top:8px" onclick="saveServiceSettings('${escapeHtml(svc.id)}')">💾 Сохранить настройки</button>
+    </div>` : ''}
     ${svc.post_install ? `
     <div class="modal-section">
       <h3>После установки</h3>
@@ -468,6 +499,24 @@ async function serviceAction(id, action) {
     await loadCatalog();
     // Reopen modal с актуальным state
     setTimeout(() => openServiceModal(id), 200);
+  } catch (e) {
+    showToast('Сетевая ошибка: ' + e.message, true);
+  }
+}
+
+async function saveServiceSettings(id) {
+  const notes = document.getElementById('svc-notes').value;
+  const autoUpdate = document.getElementById('svc-auto-update').value;
+  try {
+    const r = await fetch('/api/services/' + encodeURIComponent(id) + '/settings', {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({notes, auto_update: autoUpdate})
+    });
+    const j = await r.json();
+    if (!j.ok) { showToast('Не удалось: ' + (j.message || j.error), true); return; }
+    showToast('Сохранено');
+    await loadCatalog();
   } catch (e) {
     showToast('Сетевая ошибка: ' + e.message, true);
   }
@@ -685,8 +734,135 @@ async function refreshCatalog() {
   }
 }
 
+async function loadProfiles() {
+  try {
+    const r = await fetch('/api/services/profiles');
+    const j = await r.json();
+    if (!j.ok) return;
+    const container = document.getElementById('profiles');
+    if (!j.profiles || j.profiles.length === 0) {
+      container.innerHTML = '<div style="padding: 16px; color: var(--text-muted); font-size: 12px;">Профили будут доступны после обновления каталога</div>';
+      return;
+    }
+    container.innerHTML = j.profiles.map(p => profileCard(p)).join('');
+  } catch (_) { /* skip */ }
+}
+
+function profileCard(p) {
+  const ready = p._ready;
+  const installed = p._installed_count;
+  const total = p._total_services;
+  const pct = total > 0 ? Math.round(installed * 100 / total) : 0;
+  return `
+    <div class="card" style="border-color: ${p.color || 'var(--border)'}; cursor: default;">
+      <div class="card-head">
+        <div class="card-icon" style="background: ${p.color || 'var(--bg-inner)'}33; border-color: ${p.color || 'var(--border)'};">${p.icon || '📦'}</div>
+        <div class="card-title-block">
+          <p class="card-name">${escapeHtml(p.name)}</p>
+          <p class="card-tag">${escapeHtml(p.tagline || '')}</p>
+        </div>
+      </div>
+      <div style="margin: 8px 0; height: 6px; background: var(--bg-inner); border-radius: 3px; overflow: hidden;">
+        <div style="width: ${pct}%; height: 100%; background: ${p.color || 'var(--ok)'}; transition: width 0.3s;"></div>
+      </div>
+      <p style="margin: 4px 0 8px; font-size: 11.5px; color: var(--text-muted);">
+        ${installed}/${total} установлено · ${pct}%
+      </p>
+      <p style="margin: 4px 0 10px; font-size: 11.5px; color: var(--text-muted); line-height: 1.4;">
+        ${escapeHtml((p.description || '').split('\n').slice(0,2).join(' ').trim().slice(0, 140))}…
+      </p>
+      <div style="display: flex; gap: 6px; flex-wrap: wrap; font-size: 10.5px; padding-top: 8px; border-top: 1px solid var(--border);">
+        ${p.pricing_hint_rub ? `<span class="badge">~${p.pricing_hint_rub} ₽/мес ценность</span>` : ''}
+        ${p.estimated_ram_mb ? `<span class="badge">${Math.round(p.estimated_ram_mb/1024 * 10)/10} GB RAM</span>` : ''}
+        ${p.estimated_disk_gb ? `<span class="badge">${p.estimated_disk_gb} GB disk</span>` : ''}
+      </div>
+      <div style="display: flex; gap: 6px; margin-top: 10px;">
+        <button class="btn-action" style="flex:1" onclick="showProfileDetails('${escapeHtml(p.id)}')">📋 Подробнее</button>
+        ${ready
+          ? '<button class="btn-action" style="flex:1;color:var(--ok);border-color:rgba(29,158,117,0.4)" disabled>✓ Готов</button>'
+          : `<button class="btn-primary" style="flex:1;background:${p.color || 'var(--accent)'};border-color:${p.color || 'var(--accent)'}" onclick="installProfile('${escapeHtml(p.id)}')">Установить пакет</button>`
+        }
+      </div>
+    </div>`;
+}
+
+let _profilesData = [];
+
+async function showProfileDetails(profileId) {
+  try {
+    if (!_profilesData.length) {
+      const r = await fetch('/api/services/profiles');
+      const j = await r.json();
+      _profilesData = j.profiles || [];
+    }
+    const p = _profilesData.find(x => x.id === profileId);
+    if (!p) { showToast('Профиль не найден', true); return; }
+    const svcInfo = (p.services || []).map(sid => {
+      const svc = _catalog.find(x => x.id === sid);
+      const inst = svc && svc._installed;
+      if (svc && inst && inst.status === 'running') return `<li class="ok">${escapeHtml(svc.name)} — запущен</li>`;
+      if (svc && inst) return `<li class="ok">${escapeHtml(svc.name)} — установлен</li>`;
+      if (svc && !svc._compatible) return `<li class="bad">${escapeHtml(svc.name)} — несовместим</li>`;
+      if (svc) return `<li>${escapeHtml(svc.name)} — будет установлен</li>`;
+      return `<li class="bad">${escapeHtml(sid)} — нет в каталоге</li>`;
+    }).join('');
+    const body = document.getElementById('svc-modal-body');
+    body.innerHTML = `
+      <div class="modal-head">
+        <div class="modal-icon" style="background:${p.color}33;border-color:${p.color}">${p.icon || '📦'}</div>
+        <div style="flex:1">
+          <h2 class="modal-title">Пакет «${escapeHtml(p.name)}»</h2>
+          <p class="modal-tag">${escapeHtml(p.tagline || '')}</p>
+          <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;font-size:11px">
+            ${p.pricing_hint_rub ? `<span class="badge">~${p.pricing_hint_rub} ₽/мес ценность для клиента</span>` : ''}
+            ${p.target_audience ? `<span class="badge">${escapeHtml(p.target_audience)}</span>` : ''}
+          </div>
+        </div>
+      </div>
+      <div class="modal-section">
+        <h3>Описание</h3>
+        <div style="white-space:pre-wrap;font-size:12.5px;line-height:1.55">${escapeHtml(p.description || '')}</div>
+      </div>
+      <div class="modal-section">
+        <h3>Состав пакета (${p._installed_count}/${p._total_services} установлено)</h3>
+        <ul class="req-list">${svcInfo}</ul>
+      </div>
+      <div class="modal-section">
+        <h3>Требования</h3>
+        <ul class="req-list">
+          <li>RAM: ~${Math.round((p.estimated_ram_mb||0)/1024*10)/10} GB</li>
+          <li>Диск: ~${p.estimated_disk_gb || '?'} GB</li>
+        </ul>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-close" onclick="closeModal()">Закрыть</button>
+        ${p._ready
+          ? '<button class="btn-primary" disabled>✓ Уже установлен</button>'
+          : `<button class="btn-primary" style="background:${p.color};border-color:${p.color}" onclick="installProfile('${escapeHtml(p.id)}')">Установить пакет</button>`
+        }
+      </div>`;
+    document.getElementById('svc-modal').classList.add('show');
+  } catch (e) {
+    showToast('Ошибка: ' + e.message, true);
+  }
+}
+
+async function installProfile(profileId) {
+  if (!confirm(`Установить пакет «${profileId}»? Это может занять 5-30 минут (зависит от размеров образов).`)) return;
+  try {
+    const r = await fetch('/api/services/profiles/' + encodeURIComponent(profileId) + '/install', { method: 'POST' });
+    const j = await r.json();
+    if (!j.ok) { showToast('Не удалось: ' + (j.message || j.error), true); return; }
+    showToast(j.message);
+    showProgressUI(profileId, 'install');   // используем тот же progress UI
+  } catch (e) {
+    showToast('Сетевая ошибка: ' + e.message, true);
+  }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   loadCatalog();
+  loadProfiles();
 });
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') closeModal();

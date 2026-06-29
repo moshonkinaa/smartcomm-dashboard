@@ -40,6 +40,7 @@ except ImportError:
 CATALOG_REPO = "https://github.com/moshonkinaa/smartcomm-services-catalog.git"
 CATALOG_DIR = Path("/opt/smartcomm-services-catalog")
 SERVICES_DIR = CATALOG_DIR / "services"
+PROFILES_DIR = CATALOG_DIR / "profiles"
 
 # Где хранятся данные установленных сервисов
 DATA_BASE = Path("/var/lib/smartcomm-services")
@@ -122,6 +123,113 @@ def load_catalog(force=False):
     return services
 
 
+_PROFILES_CACHE = {"ts": 0, "data": None}
+
+
+def load_profiles(force=False):
+    """Список профилей-пакетов (Базовый/Стандарт/Премиум)."""
+    now = time.time()
+    if not force and _PROFILES_CACHE["data"] and (now - _PROFILES_CACHE["ts"]) < _CATALOG_TTL:
+        return _PROFILES_CACHE["data"]
+    profiles = []
+    if PROFILES_DIR.exists() and _HAS_YAML:
+        for f in sorted(PROFILES_DIR.glob("*.yaml")):
+            m = _load_one_manifest(f)
+            if m:
+                profiles.append(m)
+    profiles.sort(key=lambda p: p.get("order", 999))
+    _PROFILES_CACHE["data"] = profiles
+    _PROFILES_CACHE["ts"] = now
+    return profiles
+
+
+def install_profile(profile_id):
+    """Запускает установку всех сервисов профиля последовательно в фоне.
+    Пропускает уже установленные. Возвращает (ok, message)."""
+    profile = next((p for p in load_profiles() if p.get("id") == profile_id), None)
+    if not profile:
+        return False, f"профиль '{profile_id}' не найден"
+    svcs = profile.get("services", [])
+    if not svcs:
+        return False, "профиль пустой"
+
+    # Фильтруем: уже установленные пропускаем, несовместимые тоже
+    catalog_ids = {s.get("id") for s in load_catalog()}
+    to_install = []
+    skipped = []
+    for sid in svcs:
+        if sid not in catalog_ids:
+            skipped.append(f"{sid} (нет в каталоге)")
+            continue
+        manifest = next((s for s in load_catalog() if s.get("id") == sid), None)
+        compat_ok, reason = is_compatible_with_platform(manifest)
+        if not compat_ok:
+            skipped.append(f"{sid} ({reason})")
+            continue
+        if get_installed(sid):
+            skipped.append(f"{sid} (уже установлен)")
+            continue
+        to_install.append(sid)
+
+    if not to_install:
+        return False, "нечего устанавливать: все либо стоят, либо несовместимы. " + "; ".join(skipped)
+
+    # Запускаем worker-поток
+    t = threading.Thread(
+        target=_profile_install_worker,
+        args=(profile, to_install, skipped),
+        daemon=True,
+        name=f"profile-install-{profile_id}"
+    )
+    t.start()
+    return True, f"установка пакета запущена: {len(to_install)} сервисов в очереди" + (
+        f", пропущено {len(skipped)}" if skipped else ""
+    )
+
+
+def _profile_install_worker(profile, to_install, skipped):
+    """Последовательно ставит сервисы профиля. Прогресс пишет под profile_id."""
+    pid = profile["id"]
+    _progress_set(pid, state="running", phase="preparing",
+                  started_at=time.time(), log=deque(maxlen=500), error=None)
+    _progress_set(pid, log_line=f"=== Установка пакета «{profile.get('name')}» ===")
+    _progress_set(pid, log_line=f"  к установке: {len(to_install)} сервисов")
+    if skipped:
+        _progress_set(pid, log_line=f"  пропущено: {', '.join(skipped)}")
+
+    successes = []
+    failures = []
+    for sid in to_install:
+        _progress_set(pid, phase="pulling",
+                      log_line=f"--- [{sid}] Запускаю установку...")
+        manifest = next((s for s in load_catalog() if s.get("id") == sid), None)
+        if not manifest:
+            failures.append(f"{sid} (не найден)")
+            continue
+        # Вызываем установку синхронно (не через install_service, чтобы дождаться)
+        try:
+            _install_worker(manifest)
+            # Проверяем результат
+            svc_prog = get_progress(sid)
+            if svc_prog and svc_prog.get("phase") == "error":
+                failures.append(f"{sid}: {svc_prog.get('error', 'unknown')}")
+                _progress_set(pid, log_line=f"--- [{sid}] ❌ {svc_prog.get('error', '')[:100]}")
+            else:
+                successes.append(sid)
+                _progress_set(pid, log_line=f"--- [{sid}] ✓ установлен")
+        except Exception as e:
+            failures.append(f"{sid}: {e}")
+            _progress_set(pid, log_line=f"--- [{sid}] ❌ {e}")
+
+    if failures:
+        _progress_set(pid, state="done", phase="error",
+                      error=f"{len(failures)} fail: {'; '.join(failures[:3])}",
+                      log_line=f"=== ЗАВЕРШЕНО: {len(successes)} ✓, {len(failures)} ✗ ===")
+    else:
+        _progress_set(pid, state="done", phase="done",
+                      log_line=f"=== ✓ Пакет «{profile.get('name')}» установлен — {len(successes)} сервисов ===")
+
+
 def catalog_status():
     """Метаданные каталога — где он, версия HEAD, last-fetch."""
     info = {
@@ -143,7 +251,8 @@ def catalog_status():
     info["services_count"] = len(load_catalog())
     try:
         sha = subprocess.run(
-            ["git", "-C", str(CATALOG_DIR), "log", "-1", "--format=%h|%s|%ct"],
+            ["sudo", "git", "-c", "safe.directory=*",
+             "-C", str(CATALOG_DIR), "log", "-1", "--format=%h|%s|%ct"],
             capture_output=True, text=True, timeout=5
         )
         if sha.returncode == 0 and sha.stdout.strip():
@@ -160,23 +269,40 @@ def catalog_status():
 
 def refresh_catalog():
     """Клонирует репо если нет, или git pull. Сбрасывает кеш.
-    Возвращает (ok, message)."""
+    Возвращает (ok, message).
+
+    Использует sudo для всех git операций — каталог обычно owned root после
+    install.sh, а flask-процесс крутится под service-user. Также передаёт
+    `safe.directory=*` через -c чтобы обойти git 2.x dubious ownership check
+    БЕЗ модификации /etc/gitconfig (опасно для общей системы)."""
+    git = ["sudo", "git", "-c", "safe.directory=*"]
     try:
         if not CATALOG_DIR.exists():
-            CATALOG_DIR.parent.mkdir(parents=True, exist_ok=True)
             r = subprocess.run(
-                ["git", "clone", "--depth=1", CATALOG_REPO, str(CATALOG_DIR)],
+                ["sudo", "mkdir", "-p", str(CATALOG_DIR.parent)],
+                capture_output=True, text=True, timeout=10
+            )
+            if r.returncode != 0:
+                return False, f"mkdir failed: {r.stderr.strip()[:200]}"
+            r = subprocess.run(
+                git + ["clone", "--depth=1", CATALOG_REPO, str(CATALOG_DIR)],
                 capture_output=True, text=True, timeout=60
             )
             if r.returncode != 0:
                 return False, f"git clone failed: {r.stderr.strip()[:200]}"
         else:
             r = subprocess.run(
-                ["git", "-C", str(CATALOG_DIR), "pull", "--ff-only"],
+                git + ["-C", str(CATALOG_DIR), "fetch", "--depth=1", "origin", "main"],
                 capture_output=True, text=True, timeout=30
             )
             if r.returncode != 0:
-                return False, f"git pull failed: {r.stderr.strip()[:200]}"
+                return False, f"git fetch failed: {r.stderr.strip()[:200]}"
+            r = subprocess.run(
+                git + ["-C", str(CATALOG_DIR), "reset", "--hard", "origin/main"],
+                capture_output=True, text=True, timeout=10
+            )
+            if r.returncode != 0:
+                return False, f"git reset failed: {r.stderr.strip()[:200]}"
         _CATALOG_CACHE["data"] = None
         _CATALOG_CACHE["ts"] = 0
         return True, f"OK — {len(load_catalog(force=True))} сервисов"
@@ -230,6 +356,23 @@ def list_installed():
         return [dict(r) for r in rows]
     except sqlite3.Error:
         return []
+
+
+def update_settings(service_id, notes=None, auto_update=None):
+    """Обновляет notes / auto_update для installed сервиса."""
+    if get_installed(service_id) is None:
+        return False, "сервис не установлен"
+    fields = {}
+    if notes is not None:
+        fields["notes"] = str(notes)[:2000]   # лимит чтобы не разрастаться
+    if auto_update is not None:
+        if auto_update not in ("never", "weekly", "monthly"):
+            return False, "auto_update должно быть never/weekly/monthly"
+        fields["auto_update"] = auto_update
+    if not fields:
+        return False, "нечего обновить"
+    _db_upsert_installed(service_id, **fields)
+    return True, "OK"
 
 
 def get_installed(service_id):
@@ -491,11 +634,116 @@ def discover_existing():
 
 # ============ Background status sampler ============
 
+_STATS_LOCK = threading.Lock()
+_STATS = {}  # {container_name: {cpu_pct, mem_mb, mem_pct, net_rx_mb, net_tx_mb, ts}}
+
+
+def _parse_docker_size(s):
+    """'12.3MiB' / '1.2GiB' / '500kB' → MB float."""
+    if not s:
+        return 0.0
+    m = re.match(r"([\d.]+)\s*([KMGT]?i?B)?", s)
+    if not m:
+        return 0.0
+    val = float(m.group(1))
+    unit = (m.group(2) or "B").upper()
+    factors = {
+        "B": 1/1024/1024, "KB": 1/1024, "MB": 1.0, "GB": 1024.0, "TB": 1024*1024,
+        "KIB": 1/1024, "MIB": 1.0, "GIB": 1024.0, "TIB": 1024*1024,
+    }
+    return val * factors.get(unit, 1.0)
+
+
+def _sample_docker_stats():
+    """Один проход docker stats --no-stream — обновляет _STATS для всех контейнеров.
+    Использует --format чтобы получить парсимый вывод."""
+    try:
+        r = subprocess.run(
+            ["sudo", "docker", "stats", "--no-stream", "--format",
+             "{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}|{{.MemPerc}}|{{.NetIO}}"],
+            capture_output=True, text=True, timeout=15
+        )
+        if r.returncode != 0:
+            return
+        now = time.time()
+        new_stats = {}
+        for ln in r.stdout.splitlines():
+            parts = ln.split("|", 4)
+            if len(parts) != 5:
+                continue
+            name, cpu_s, mem_use_s, mem_pct_s, net_io = parts
+            cpu_pct = 0.0
+            try:
+                cpu_pct = float(cpu_s.rstrip("%").strip())
+            except ValueError:
+                pass
+            mem_mb = 0.0
+            try:
+                # "1.234MiB / 1.5GiB"
+                mem_used = mem_use_s.split("/")[0].strip()
+                mem_mb = _parse_docker_size(mem_used)
+            except (ValueError, IndexError):
+                pass
+            mem_pct = 0.0
+            try:
+                mem_pct = float(mem_pct_s.rstrip("%").strip())
+            except ValueError:
+                pass
+            net_rx_mb = net_tx_mb = 0.0
+            try:
+                # "1.5kB / 2.3MB"
+                rx_s, tx_s = [p.strip() for p in net_io.split("/", 1)]
+                net_rx_mb = _parse_docker_size(rx_s)
+                net_tx_mb = _parse_docker_size(tx_s)
+            except (ValueError, IndexError):
+                pass
+            new_stats[name] = {
+                "cpu_pct": round(cpu_pct, 2),
+                "mem_mb": round(mem_mb, 1),
+                "mem_pct": round(mem_pct, 2),
+                "net_rx_mb": round(net_rx_mb, 2),
+                "net_tx_mb": round(net_tx_mb, 2),
+                "ts": int(now),
+            }
+        with _STATS_LOCK:
+            _STATS.update(new_stats)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+
+def get_service_stats(service_id):
+    """Aggregate stats всех контейнеров сервиса. Возвращает dict или None."""
+    compose_path = _service_dir(service_id) / "compose.yml"
+    if not compose_path.exists():
+        return None
+    try:
+        text = compose_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    names = re.findall(r"container_name:\s*([^\s\n]+)", text)
+    if not names:
+        return None
+    with _STATS_LOCK:
+        items = [_STATS[n] for n in names if n in _STATS]
+    if not items:
+        return None
+    return {
+        "cpu_pct": round(sum(i["cpu_pct"] for i in items), 2),
+        "mem_mb": round(sum(i["mem_mb"] for i in items), 1),
+        "mem_pct": round(sum(i["mem_pct"] for i in items), 2),
+        "net_rx_mb": round(sum(i["net_rx_mb"] for i in items), 2),
+        "net_tx_mb": round(sum(i["net_tx_mb"] for i in items), 2),
+        "containers": len(items),
+        "ts": max(i["ts"] for i in items),
+    }
+
+
 def _status_sampler_loop():
-    """Раз в 30 сек обновляем статусы installed-сервисов из docker inspect."""
+    """Раз в 30 сек обновляем статусы + ресурсы installed-сервисов."""
     while True:
         try:
             sync_statuses()
+            _sample_docker_stats()
         except Exception as e:
             print(f"[services-sampler] error: {e}")
         time.sleep(30)
