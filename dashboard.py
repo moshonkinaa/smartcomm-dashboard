@@ -103,7 +103,7 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "1.4.1"
+VERSION = "1.4.2"
 RELEASE_DATE = "2026-06-27"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # Минимальная версия клиента (PWA/cache) с которой backend ещё совместим.
@@ -1826,18 +1826,37 @@ def api_version():
 
 @app.route("/api/changelog")
 def api_changelog():
-    """Отдаёт CHANGELOG.md как текст (для модалки версий)."""
+    """Отдаёт CHANGELOG.md как текст (для модалки версий).
+    Если файл отсутствует локально — fallback на raw.githubusercontent.com.
+    Это страховка для случаев когда install.sh не подтянул файл (legacy installs)."""
     p = BASE / "CHANGELOG.md"
-    if not p.exists():
-        return jsonify({"ok": False, "error": "changelog not found"}), 404
+    if p.exists():
+        try:
+            return jsonify({
+                "ok": True,
+                "version": VERSION,
+                "source": "local",
+                "markdown": p.read_text(encoding="utf-8"),
+            })
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
+    # Fallback на GitHub
     try:
+        url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/CHANGELOG.md"
+        req = urllib.request.Request(url, headers={"User-Agent": f"smartcomm-dashboard/{VERSION}"})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            md = resp.read().decode("utf-8", errors="replace")
         return jsonify({
             "ok": True,
             "version": VERSION,
-            "markdown": p.read_text(encoding="utf-8"),
+            "source": "github",
+            "markdown": md,
         })
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+        return jsonify({
+            "ok": False,
+            "error": f"CHANGELOG.md отсутствует локально и не удалось скачать с GitHub: {e}",
+        }), 404
 
 
 def _parse_semver(v):

@@ -44,6 +44,7 @@ if ! id "$SVC_USER" >/dev/null 2>&1; then
 fi
 
 REQUIRED_FILES=(dashboard.py network.py mikrotik.py index.html network.html login.html chart.min.js manifest.json sw.js smartcomm-dashboard.service)
+OPTIONAL_FILES=(CHANGELOG.md marked.min.js)
 for f in "${REQUIRED_FILES[@]}"; do
   if [ ! -f "$SRC_DIR/$f" ]; then
     echo "ОШИБКА: не найден файл $f в $SRC_DIR"
@@ -109,8 +110,16 @@ for f in dashboard.py network.py mikrotik.py index.html network.html login.html 
   cp "$SRC_DIR/$f" "$APP_DIR/$f"
   chmod 644 "$APP_DIR/$f"
 done
+# Опциональные — копируем если есть в source
+for f in "${OPTIONAL_FILES[@]}"; do
+  if [ -f "$SRC_DIR/$f" ]; then
+    cp "$SRC_DIR/$f" "$APP_DIR/$f"
+    chmod 644 "$APP_DIR/$f"
+    echo "  скопирован опциональный: $f"
+  fi
+done
 chmod +x "$APP_DIR/dashboard.py"
-echo "  скопировано $(ls -1 $APP_DIR | wc -l) файлов"
+echo "  всего файлов в $APP_DIR: $(ls -1 $APP_DIR | wc -l)"
 
 # ===== 5. Sanity check Python =====
 echo ""

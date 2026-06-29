@@ -2,6 +2,25 @@
 
 Все значимые изменения проекта. Формат — Keep a Changelog + SemVer.
 
+## 1.4.2 — 2026-06-29
+
+Два cross-platform бага найдены при сравнении Pi vs Cubi на разных подсетях.
+
+### Fixed — subnet detection ловил loopback на x86
+`detect_subnet()` пробовал `ip -4 -o addr show eth0`, и если eth0 нет (Cubi: `enp45s0`) — делал fallback на `ip -4 -o addr show` (все интерфейсы). Regex `re.search` брал ПЕРВОЕ совпадение, а это loopback `lo` 127.0.0.1/8.
+- Симптом: на портале Cubi показывалась подсеть **127.0.0.0/8** вместо 192.168.101.0/24
+- Также все nmap-сканы шли по loopback — обнаруживалось 0 устройств
+- Фикс: определяем primary interface через default route в `/proc/net/route`, читаем его IP/маску, явно пропускаем `127.*` адреса. Fallback chain: default-route iface → первый UP не-lo интерфейс из `/sys/class/net/`
+
+### Fixed — модалка «История версий» пустая
+`/api/changelog` возвращал 404 «changelog not found» потому что `CHANGELOG.md` никогда не копировался в `/opt/smartcomm-dashboard/` — `install.sh` не включал его в `REQUIRED_FILES`, и мои deploy-скрипты (cp dashboard.py + index.html) тоже его не подвозили.
+- Симптом: модалка «Версия X.Y.Z» в шапке открывалась с пустым списком версий или ошибкой
+- Фикс 1: `install.sh` теперь копирует CHANGELOG.md и marked.min.js если они есть в source (новая секция `OPTIONAL_FILES`)
+- Фикс 2: `/api/changelog` имеет fallback на raw.githubusercontent.com — если файла нет локально, скачивает с GitHub (для legacy инсталляций где `install.sh` пробежал до v1.4.2). Ответ возвращает поле `source: "local"` или `source: "github"` для прозрачности.
+
+### Why
+Эти баги были невидимы пока работал только на Pi (где eth0 существует и `CHANGELOG.md` был залит вручную через `deploy_dashboard.ps1`). При cross-platform compare на Cubi оба всплыли мгновенно. v1.4.1 был «closes major gaps», v1.4.2 — последний хвост.
+
 ## 1.4.1 — 2026-06-29
 
 **Hotfix v1.4.0** — auto-detect путей iRidium Server (разные версии iRidium держат данные в разных местах).

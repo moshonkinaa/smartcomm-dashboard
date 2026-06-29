@@ -384,17 +384,60 @@ def sh(cmd, timeout=30):
         return ""
 
 
-def detect_subnet():
-    """Return CIDR of the main interface, e.g. '192.168.95.0/24'."""
-    out = sh("ip -4 -o addr show eth0 2>/dev/null || ip -4 -o addr show 2>/dev/null")
-    m = re.search(r"inet\s+(\d+\.\d+\.\d+\.\d+/\d+)", out)
-    if not m:
-        return None
+def _primary_iface_for_subnet():
+    """Имя интерфейса с default route. Pi обычно eth0, Cubi — enp45s0."""
     try:
-        net = ipaddress.ip_interface(m.group(1)).network
-        return str(net)
-    except ValueError:
-        return None
+        with open("/proc/net/route") as f:
+            next(f)  # header
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) >= 8 and parts[1] == "00000000" and parts[7] == "00000000":
+                    return parts[0]
+    except OSError:
+        pass
+    return None
+
+
+def detect_subnet():
+    """Return CIDR of the primary network interface (the one with default route).
+
+    Раньше пробовало `eth0` и fallback на `ip -4 -o addr show` (все интерфейсы),
+    из которых regex брал ПЕРВОЕ совпадение — на x86 (Cubi) это оказывался `lo`
+    127.0.0.1/8. Теперь определяем интерфейс через default route в /proc/net/route.
+    """
+    iface = _primary_iface_for_subnet()
+    if iface:
+        out = sh(f"ip -4 -o addr show {iface} 2>/dev/null")
+    else:
+        # Fallback: первый non-loopback UP интерфейс из /sys/class/net/
+        iface = None
+        try:
+            for n in sorted(os.listdir("/sys/class/net")):
+                if n == "lo":
+                    continue
+                try:
+                    with open(f"/sys/class/net/{n}/operstate") as f:
+                        if f.read().strip() == "up":
+                            iface = n
+                            break
+                except OSError:
+                    continue
+        except OSError:
+            pass
+        if not iface:
+            return None
+        out = sh(f"ip -4 -o addr show {iface} 2>/dev/null")
+    # Берём ПЕРВЫЙ adress конкретно этого интерфейса (не loopback)
+    for m in re.finditer(r"inet\s+(\d+\.\d+\.\d+\.\d+/\d+)", out):
+        ip_str = m.group(1)
+        if ip_str.startswith("127."):
+            continue
+        try:
+            net = ipaddress.ip_interface(ip_str).network
+            return str(net)
+        except ValueError:
+            continue
+    return None
 
 
 def detect_gateway():
