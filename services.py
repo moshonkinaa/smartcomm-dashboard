@@ -22,7 +22,9 @@ import re
 import shutil
 import sqlite3
 import subprocess
+import threading
 import time
+from collections import deque
 from functools import lru_cache
 from pathlib import Path
 
@@ -355,3 +357,315 @@ def _busy_ports():
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
     return busy
+
+
+# ============ Install / Uninstall (v1.6.0) ============
+#
+# Установка асинхронна — крутится в фоне thread'е, чтобы HTTP запрос не блокировался
+# (docker compose pull для immich/nextcloud занимает 5+ минут). UI опрашивает прогресс
+# через /api/services/<id>/install-progress.
+#
+# Состояние трекается через `_PROGRESS` (in-memory) + БД (installed_services).
+
+_PROGRESS_LOCK = threading.Lock()
+_PROGRESS = {}  # {service_id: {state, phase, started_at, log: deque(maxlen=500), error}}
+
+_PHASES = {
+    "queued":      "В очереди",
+    "preparing":   "Подготовка папок и compose.yml",
+    "pulling":     "Скачивание образов с Docker Hub",
+    "starting":    "Запуск контейнеров",
+    "running":     "Запущен",
+    "stopping":    "Остановка контейнеров",
+    "removing":    "Удаление контейнеров и образов",
+    "backing_up":  "Создание бэкапа",
+    "done":        "Готово",
+    "error":       "Ошибка",
+}
+
+
+def get_progress(service_id):
+    """Текущий прогресс install/uninstall. Read-only snapshot."""
+    with _PROGRESS_LOCK:
+        p = _PROGRESS.get(service_id)
+        if not p:
+            return None
+        return {
+            "service_id": service_id,
+            "state": p["state"],
+            "phase": p["phase"],
+            "phase_label": _PHASES.get(p["phase"], p["phase"]),
+            "started_at": p["started_at"],
+            "elapsed_sec": int(time.time() - p["started_at"]),
+            "log": list(p["log"])[-50:],   # последние 50 строк (для UI)
+            "error": p.get("error"),
+        }
+
+
+def _progress_set(service_id, **fields):
+    with _PROGRESS_LOCK:
+        if service_id not in _PROGRESS:
+            _PROGRESS[service_id] = {
+                "state": "running", "phase": "queued",
+                "started_at": time.time(), "log": deque(maxlen=500), "error": None,
+            }
+        for k, v in fields.items():
+            if k == "log_line" and v:
+                _PROGRESS[service_id]["log"].append(v)
+            else:
+                _PROGRESS[service_id][k] = v
+
+
+def _service_dir(service_id):
+    return DATA_BASE / service_id
+
+
+def _render_compose(manifest):
+    """Возвращает текст compose.yml с заменёнными placeholder'ами."""
+    compose_raw = manifest.get("compose", "")
+    if not compose_raw:
+        raise ValueError("manifest без compose section")
+    defaults = manifest.get("defaults", {})
+    sid = manifest["id"]
+    substitutions = {
+        "{DATA}": str(_service_dir(sid)),
+        "{MEDIA}": defaults.get("MEDIA", str(DATA_BASE / "_media")),
+        "{TZ}": defaults.get("TZ", "Europe/Moscow"),
+        "{CONTROLLER}": defaults.get("CONTROLLER", os.uname().nodename),
+    }
+    text = compose_raw
+    for k, v in substitutions.items():
+        text = text.replace(k, v)
+    return text
+
+
+def _db_upsert_installed(service_id, **fields):
+    """Insert или update строку в installed_services."""
+    try:
+        with _db() as c:
+            existing = c.execute(
+                "SELECT id FROM installed_services WHERE id = ?", (service_id,)
+            ).fetchone()
+            now = int(time.time())
+            if existing:
+                set_parts = []
+                params = []
+                for k, v in fields.items():
+                    set_parts.append(f"{k} = ?")
+                    params.append(v)
+                set_parts.append("last_action_at = ?")
+                params.append(now)
+                params.append(service_id)
+                c.execute(
+                    f"UPDATE installed_services SET {', '.join(set_parts)} WHERE id = ?",
+                    params
+                )
+            else:
+                fields.setdefault("installed_at", now)
+                fields.setdefault("last_action_at", now)
+                fields.setdefault("status", "installed")
+                cols = list(fields.keys())
+                vals = list(fields.values())
+                cols.insert(0, "id")
+                vals.insert(0, service_id)
+                placeholders = ", ".join(["?"] * len(cols))
+                c.execute(
+                    f"INSERT INTO installed_services ({', '.join(cols)}) "
+                    f"VALUES ({placeholders})",
+                    vals
+                )
+    except sqlite3.Error as e:
+        # log only, don't raise — установка важнее DB tracking
+        print(f"[services] DB upsert failed for {service_id}: {e}")
+
+
+def _db_delete_installed(service_id):
+    try:
+        with _db() as c:
+            c.execute("DELETE FROM installed_services WHERE id = ?", (service_id,))
+    except sqlite3.Error as e:
+        print(f"[services] DB delete failed for {service_id}: {e}")
+
+
+def _stream_subprocess(cmd, cwd=None, timeout=600):
+    """Запускает docker compose с stream output → строки в _PROGRESS log.
+    Возвращает (returncode, last_lines_for_error)."""
+    sid = cwd.name if cwd else "?"  # для prefix
+    try:
+        proc = subprocess.Popen(
+            cmd, cwd=str(cwd) if cwd else None,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1
+        )
+    except FileNotFoundError:
+        return 127, f"команда не найдена: {cmd[0]}"
+    last_lines = deque(maxlen=20)
+    started = time.time()
+    while True:
+        line = proc.stdout.readline()
+        if not line:
+            if proc.poll() is not None:
+                break
+            time.sleep(0.05)
+            continue
+        line = line.rstrip()
+        if line:
+            _progress_set(sid, log_line=line)
+            last_lines.append(line)
+        if time.time() - started > timeout:
+            proc.kill()
+            _progress_set(sid, log_line=f"[timeout {timeout}s — kill]")
+            return -1, "timeout"
+    rc = proc.wait()
+    return rc, "\n".join(last_lines)
+
+
+def install_service(service_id):
+    """Запускает установку в фоновом потоке. Возвращает (ok, message)."""
+    manifest = next((s for s in load_catalog() if s.get("id") == service_id), None)
+    if not manifest:
+        return False, f"сервис '{service_id}' не найден в каталоге"
+
+    # Pre-check ещё раз
+    check = install_pre_check(service_id)
+    if not check["ok"]:
+        return False, "pre-check failed: " + "; ".join(check.get("blockers", []))
+
+    existing = get_installed(service_id)
+    if existing and existing.get("status") in ("running", "installed", "installing"):
+        # Уже стоит — переустановка через uninstall+install, чтобы не сюрпризить
+        return False, f"сервис уже установлен (status={existing['status']}). Сначала удали."
+
+    # Старт фонового потока
+    t = threading.Thread(
+        target=_install_worker, args=(manifest,), daemon=True,
+        name=f"install-{service_id}"
+    )
+    t.start()
+    return True, "установка запущена в фоне"
+
+
+def _install_worker(manifest):
+    sid = manifest["id"]
+    _progress_set(sid, state="running", phase="preparing", started_at=time.time(),
+                  log=deque(maxlen=500))
+    _progress_set(sid, log_line=f"=== Установка {manifest.get('name', sid)} ===")
+    _db_upsert_installed(sid, status="installing",
+                         catalog_version=str(manifest.get("schema_version", 1)))
+
+    try:
+        # 1. Создать папку
+        sdir = _service_dir(sid)
+        sdir.mkdir(parents=True, exist_ok=True)
+        _progress_set(sid, log_line=f"  создана папка: {sdir}")
+
+        # 2. Сгенерировать compose.yml
+        compose_text = _render_compose(manifest)
+        compose_path = sdir / "compose.yml"
+        compose_path.write_text(compose_text, encoding="utf-8")
+        _progress_set(sid, log_line=f"  compose.yml: {len(compose_text)} bytes")
+
+        # 3. docker compose pull
+        _progress_set(sid, phase="pulling",
+                      log_line="=== docker compose pull ===")
+        rc, last = _stream_subprocess(
+            ["sudo", "docker", "compose", "-f", str(compose_path), "pull"],
+            cwd=sdir, timeout=900   # 15 min для тяжёлых immich/nextcloud
+        )
+        if rc != 0:
+            raise RuntimeError(f"pull rc={rc}: {last[-300:]}")
+
+        # 4. docker compose up -d
+        _progress_set(sid, phase="starting",
+                      log_line="=== docker compose up -d ===")
+        rc, last = _stream_subprocess(
+            ["sudo", "docker", "compose", "-f", str(compose_path), "up", "-d"],
+            cwd=sdir, timeout=180
+        )
+        if rc != 0:
+            raise RuntimeError(f"up rc={rc}: {last[-300:]}")
+
+        # 5. Готово
+        _progress_set(sid, state="done", phase="running",
+                      log_line=f"=== УСПЕХ — сервис запущен ===")
+        _db_upsert_installed(sid, status="running", last_started_at=int(time.time()),
+                             last_error=None)
+    except Exception as e:
+        err = f"{type(e).__name__}: {e}"
+        _progress_set(sid, state="done", phase="error", error=err,
+                      log_line=f"!!! FAIL: {err}")
+        _db_upsert_installed(sid, status="error", last_error=err[:500])
+
+
+def uninstall_service(service_id, delete_data=False):
+    """Удаление в фоновом потоке. Возвращает (ok, message)."""
+    installed = get_installed(service_id)
+    if not installed:
+        return False, f"сервис '{service_id}' не установлен"
+    t = threading.Thread(
+        target=_uninstall_worker, args=(service_id, delete_data), daemon=True,
+        name=f"uninstall-{service_id}"
+    )
+    t.start()
+    return True, "удаление запущено"
+
+
+def _uninstall_worker(sid, delete_data):
+    _progress_set(sid, state="running", phase="stopping", started_at=time.time(),
+                  log=deque(maxlen=500), error=None)
+    _progress_set(sid, log_line=f"=== Удаление {sid} ===")
+    _db_upsert_installed(sid, status="uninstalling")
+
+    try:
+        sdir = _service_dir(sid)
+        compose_path = sdir / "compose.yml"
+
+        if compose_path.exists():
+            # 1. docker compose down (volumes если delete_data)
+            _progress_set(sid, phase="removing",
+                          log_line=f"=== docker compose down{' -v' if delete_data else ''} ===")
+            cmd = ["sudo", "docker", "compose", "-f", str(compose_path), "down"]
+            if delete_data:
+                cmd.append("-v")
+            rc, last = _stream_subprocess(cmd, cwd=sdir, timeout=180)
+            if rc != 0:
+                _progress_set(sid, log_line=f"  warn: down rc={rc} — продолжаю удаление папки")
+        else:
+            _progress_set(sid, log_line="  compose.yml не найден — пропуск docker stop")
+
+        # 2. Бэкап data если не удаляем
+        if not delete_data and sdir.exists():
+            _progress_set(sid, phase="backing_up",
+                          log_line=f"=== Бэкап {sdir} в _backups/ ===")
+            backup_dir = DATA_BASE / "_backups"
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            backup_path = backup_dir / f"{sid}-{int(time.time())}.tar.gz"
+            try:
+                subprocess.run(
+                    ["sudo", "tar", "czf", str(backup_path), "-C", str(DATA_BASE), sid],
+                    check=True, capture_output=True, text=True, timeout=300
+                )
+                _progress_set(sid, log_line=f"  бэкап: {backup_path}")
+            except subprocess.CalledProcessError as e:
+                _progress_set(sid, log_line=f"  warn: бэкап не удался — {e.stderr[:100] if e.stderr else e}")
+
+        # 3. Удаление папки данных
+        if delete_data and sdir.exists():
+            _progress_set(sid, log_line=f"=== Удаление папки {sdir} ===")
+            subprocess.run(["sudo", "rm", "-rf", str(sdir)], check=False, timeout=60)
+        elif sdir.exists():
+            # Сохраняем data, удаляем только compose файл
+            try:
+                compose_path.unlink(missing_ok=True)
+            except (OSError, AttributeError):
+                pass
+
+        # 4. БД
+        _db_delete_installed(sid)
+        _progress_set(sid, state="done", phase="done",
+                      log_line=f"=== Сервис удалён ===")
+    except Exception as e:
+        err = f"{type(e).__name__}: {e}"
+        _progress_set(sid, state="done", phase="error", error=err,
+                      log_line=f"!!! FAIL: {err}")
+        _db_upsert_installed(sid, status="error", last_error=err[:500])

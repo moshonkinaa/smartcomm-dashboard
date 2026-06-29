@@ -2,6 +2,48 @@
 
 Все значимые изменения проекта. Формат — Keep a Changelog + SemVer.
 
+## 1.6.0 — 2026-06-30
+
+**🛍 Магазин сервисов — Phase 2: реальная установка и удаление.**
+
+### Added — Backend install/uninstall
+- `install_service(id)` — запускает установку в **фоновом потоке**, не блокирует HTTP запрос
+- `uninstall_service(id, delete_data=False)` — фоновое удаление с auto-backup данных в `_backups/`
+- `_render_compose(manifest)` — генерация compose.yml с заменой placeholder'ов (`{DATA}`, `{MEDIA}`, `{TZ}`, `{CONTROLLER}`)
+- `_stream_subprocess()` — запускает docker compose с live-streaming вывода → in-memory log buffer (последние 500 строк, 50 показывается в UI)
+- `_PROGRESS` global state с phase-tracker: `queued → preparing → pulling → starting → running` (или `error`)
+- Timeout'ы: pull=15min (immich/nextcloud занимают долго), up/down=3min
+
+### Added — API endpoints
+- **`POST /api/services/<id>/install`** — admin auth + audit log. Возвращает сразу `{ok:true, message:"установка запущена"}`. Реальный процесс в фоне.
+- **`POST /api/services/<id>/uninstall`** — admin auth + audit. Body: `{password, delete_data}`. **Повторная проверка пароля** даже для admin сессии (защита от случайного клика). По умолчанию data сохраняется в `/var/lib/smartcomm-services/_backups/<id>-<ts>.tar.gz`.
+- **`GET /api/services/<id>/install-progress`** — polling (UI опрашивает каждые 2с). Возвращает `phase`, `phase_label` (русский), `elapsed_sec`, `state`, last 50 log lines, `error`.
+
+### Added — UI
+- Кнопка **«Установить»** в модалке деталей сервиса теперь работает — после pre-check ✓
+- **Live progress modal** — заголовок «⏳ docker compose pull», timer (`Xс`), state badge, ScrollPane с логом docker (auto-scroll к новым строкам)
+- Кнопка **«🗑 Удалить»** в модалке для installed-сервисов:
+  - Модалка double-confirm с password input (admin password проверяется backend'ом повторно)
+  - Чекбокс «Удалить также данные сервиса» (по умолчанию OFF → данные в backup)
+  - Visual warning (красный border, ⚠ иконка)
+- Toast при успехе/ошибке с авто-refresh каталога
+
+### Why
+v1.5.0 был фундамент (каталог + UI). v1.6.0 даёт реальную возможность ставить и удалять сервисы из дашборда — это core-функционал «магазина для контроллера».
+
+### Безопасность
+- Все install/uninstall actions требуют **admin auth** (декоратор `@requires_admin`)
+- Uninstall требует **повторную проверку пароля** — даже если сессия активна, без правильного пароля не сработает (защита от случайного нажатия)
+- Удаление data — **отдельный opt-in checkbox** в UI, по умолчанию OFF
+- Auto-backup перед удалением (если data сохраняется) в `_backups/<id>-<unix_ts>.tar.gz`
+- `audit_action` декоратор пишет каждое install/uninstall с username + service_id в audit_log
+
+### Известные ограничения (для v1.7.0+)
+- Нет «отмены» в процессе установки (kill всё-таки можно через Portainer)
+- Нет live-обновления статуса контейнера после `up` (полагаемся на `docker compose ps` — добавим в v1.7.0)
+- Нет UI для start/stop/restart уже установленного — будет в v1.7.0 вместе с health-check
+- Логи docker — только последние 500 строк per service, не persistent
+
 ## 1.5.0 — 2026-06-30
 
 **🛍 Магазин сервисов** — каталог + UI + pre-install чек (Phase 0+1).

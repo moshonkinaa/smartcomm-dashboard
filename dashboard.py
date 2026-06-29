@@ -104,7 +104,7 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 RELEASE_DATE = "2026-06-27"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # Минимальная версия клиента (PWA/cache) с которой backend ещё совместим.
@@ -1922,6 +1922,48 @@ def api_services_refresh():
 def api_services_pre_check(service_id):
     """Pre-install чек (RAM/disk/ports/docker)."""
     return jsonify(services_mod.install_pre_check(service_id))
+
+
+@app.route("/api/services/<service_id>/install", methods=["POST"])
+@requires_admin
+@audit_action("service_install", target_from_path=True)
+def api_services_install(service_id):
+    """Запустить установку. Возвращает сразу — прогресс через /install-progress."""
+    ok, msg = services_mod.install_service(service_id)
+    return jsonify({"ok": ok, "message": msg, "service_id": service_id}), (200 if ok else 400)
+
+
+@app.route("/api/services/<service_id>/uninstall", methods=["POST"])
+@requires_admin
+@audit_action("service_uninstall", target_from_path=True)
+def api_services_uninstall(service_id):
+    """Удалить сервис. Требует password admin'а в body для повторной проверки.
+    Body: {"password": "...", "delete_data": false}
+    delete_data=true → удалить volume'ы И папку данных (НЕ восстановить!)."""
+    data = request.get_json(silent=True) or {}
+    pw = data.get("password", "")
+    delete_data = bool(data.get("delete_data", False))
+
+    # Двойная проверка пароля даже для admin сессии
+    sess = _get_session()
+    if not sess:
+        return jsonify({"ok": False, "error": "not authenticated"}), 401
+    user = network_bp.auth_get_user(sess.get("username"))
+    if not user or not network_bp.auth_verify_password(pw, user["salt"], user["password_hash"]):
+        return jsonify({"ok": False, "error": "Неверный пароль"}), 403
+
+    ok, msg = services_mod.uninstall_service(service_id, delete_data=delete_data)
+    return jsonify({"ok": ok, "message": msg, "delete_data": delete_data}), (200 if ok else 400)
+
+
+@app.route("/api/services/<service_id>/install-progress")
+@requires_auth
+def api_services_install_progress(service_id):
+    """Текущий прогресс install/uninstall (polling каждые 2-3с)."""
+    p = services_mod.get_progress(service_id)
+    if not p:
+        return jsonify({"ok": False, "state": "none", "message": "no active operation"})
+    return jsonify({"ok": True, **p})
 
 
 @app.route("/api/changelog")

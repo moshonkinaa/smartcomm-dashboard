@@ -396,7 +396,9 @@ async function openServiceModal(id) {
     ${svc.docs_url ? `<a class="docs-link" href="${escapeHtml(svc.docs_url)}" target="_blank" rel="noopener">📖 Документация ↗</a>` : ''}
     <div class="modal-actions">
       <button class="btn-close" onclick="closeModal()">Закрыть</button>
-      <button class="btn-primary" id="install-btn" disabled onclick="installService('${escapeHtml(svc.id)}')">Установить</button>
+      ${svc._installed
+        ? `<button class="btn-action" style="background:rgba(226,75,74,0.12);color:var(--err);border-color:rgba(226,75,74,0.4)" onclick="uninstallService('${escapeHtml(svc.id)}', ${JSON.stringify(svc.name)})">🗑 Удалить</button>`
+        : `<button class="btn-primary" id="install-btn" disabled onclick="installService('${escapeHtml(svc.id)}')">Установить</button>`}
     </div>`;
   document.getElementById('svc-modal').classList.add('show');
   // Параллельно дёргаем pre-check
@@ -417,6 +419,7 @@ async function loadPreCheck(id) {
     sect.innerHTML = `<h3>Проверка перед установкой</h3>
       <ul class="req-list">${checks}${blockers}</ul>`;
     const btn = document.getElementById('install-btn');
+    if (!btn) return;  // сервис уже установлен — кнопки нет
     if (j.ok) {
       btn.disabled = false;
       btn.textContent = 'Установить';
@@ -429,10 +432,148 @@ async function loadPreCheck(id) {
   }
 }
 
-function installService(id) {
-  // Phase 0: установка не реализована, появится в v1.6.0
-  showToast('Установка появится в v1.6.0 — пока только каталог и pre-check', true);
+async function installService(id) {
+  const btn = document.getElementById('install-btn');
+  btn.disabled = true;
+  btn.textContent = 'Запускаю...';
+  try {
+    const r = await fetch('/api/services/' + encodeURIComponent(id) + '/install', { method: 'POST' });
+    const j = await r.json();
+    if (!j.ok) {
+      showToast('Не удалось запустить: ' + (j.message || j.error || 'unknown'), true);
+      btn.disabled = false;
+      btn.textContent = 'Установить';
+      return;
+    }
+    showToast('Установка запущена в фоне');
+    showProgressUI(id, 'install');
+  } catch (e) {
+    showToast('Сетевая ошибка: ' + e.message, true);
+    btn.disabled = false;
+    btn.textContent = 'Установить';
+  }
 }
+
+async function uninstallService(id, svcName) {
+  // Закрываем текущую модалку, открываем confirm-modal
+  closeModal();
+  const html = `
+    <div class="modal-head">
+      <div class="modal-icon" style="background:rgba(226,75,74,0.15);border-color:rgba(226,75,74,0.4)">⚠</div>
+      <div style="flex:1">
+        <h2 class="modal-title">Удалить «${escapeHtml(svcName)}»?</h2>
+        <p class="modal-tag">Контейнеры остановятся, образы удалятся. Данные по умолчанию сохраняются в /var/lib/smartcomm-services/_backups/.</p>
+      </div>
+    </div>
+    <div class="modal-section">
+      <label style="display:block;margin-bottom:6px;font-size:12.5px;color:var(--text-muted)">Введи свой пароль admin для подтверждения:</label>
+      <input type="password" id="uninst-pw" class="search" style="width:100%" autocomplete="off" placeholder="Пароль...">
+    </div>
+    <div class="modal-section" style="background:rgba(226,75,74,0.05);padding:10px 12px;border-radius:9px;border:1px solid rgba(226,75,74,0.2)">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12.5px;color:var(--err)">
+        <input type="checkbox" id="uninst-delete-data" style="width:16px;height:16px">
+        <span><b>Удалить также данные сервиса</b> (config, БД, файлы) — НЕЛЬЗЯ восстановить!</span>
+      </label>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-close" onclick="closeModal()">Отмена</button>
+      <button class="btn-primary" style="background:var(--err);border-color:var(--err)" onclick="confirmUninstall('${escapeHtml(id)}')">Удалить</button>
+    </div>`;
+  document.getElementById('svc-modal-body').innerHTML = html;
+  document.getElementById('svc-modal').classList.add('show');
+  setTimeout(() => document.getElementById('uninst-pw').focus(), 50);
+}
+
+async function confirmUninstall(id) {
+  const pw = document.getElementById('uninst-pw').value;
+  const deleteData = document.getElementById('uninst-delete-data').checked;
+  if (!pw) { showToast('Введи пароль', true); return; }
+  try {
+    const r = await fetch('/api/services/' + encodeURIComponent(id) + '/uninstall', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: pw, delete_data: deleteData })
+    });
+    const j = await r.json();
+    if (!j.ok) {
+      showToast('Не удалось: ' + (j.error || j.message || 'unknown'), true);
+      return;
+    }
+    showToast('Удаление запущено');
+    showProgressUI(id, 'uninstall');
+  } catch (e) {
+    showToast('Сетевая ошибка: ' + e.message, true);
+  }
+}
+
+let _progressTimer = null;
+
+function showProgressUI(id, action) {
+  const svc = _catalog.find(s => s.id === id);
+  const title = (action === 'install' ? 'Установка ' : 'Удаление ') + (svc ? svc.name : id);
+  const body = document.getElementById('svc-modal-body');
+  body.innerHTML = `
+    <div class="modal-head">
+      <div class="modal-icon">${svc ? categoryIcon(svc.category) : '📦'}</div>
+      <div style="flex:1">
+        <h2 class="modal-title">${escapeHtml(title)}</h2>
+        <p class="modal-tag" id="prog-phase">⏳ Запуск...</p>
+      </div>
+    </div>
+    <div class="modal-section">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <span class="text-muted fs-sm" id="prog-elapsed">0с</span>
+        <span class="text-muted fs-sm" id="prog-state">running</span>
+      </div>
+      <pre class="post-install" id="prog-log" style="max-height:320px;overflow-y:auto;font-size:11px">Ожидаю первый вывод...</pre>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-close" id="prog-close" onclick="stopProgressUI()" disabled>Закрыть</button>
+    </div>`;
+  document.getElementById('svc-modal').classList.add('show');
+  pollProgress(id, action);
+  _progressTimer = setInterval(() => pollProgress(id, action), 2000);
+}
+
+async function pollProgress(id, action) {
+  try {
+    const r = await fetch('/api/services/' + encodeURIComponent(id) + '/install-progress');
+    const j = await r.json();
+    if (!j.ok) return;
+    document.getElementById('prog-phase').textContent =
+      (j.phase === 'error' ? '❌ ' : (j.state === 'done' ? '✓ ' : '⏳ ')) +
+      (j.phase_label || j.phase);
+    document.getElementById('prog-elapsed').textContent = j.elapsed_sec + 'с';
+    document.getElementById('prog-state').textContent = j.state;
+    const logEl = document.getElementById('prog-log');
+    if (j.log && j.log.length) {
+      const wasAtBottom = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 20;
+      logEl.textContent = j.log.join('\n');
+      if (wasAtBottom) logEl.scrollTop = logEl.scrollHeight;
+    }
+    if (j.state === 'done') {
+      clearInterval(_progressTimer);
+      _progressTimer = null;
+      document.getElementById('prog-close').disabled = false;
+      if (j.phase === 'error') {
+        showToast('Ошибка: ' + (j.error || '?'), true);
+      } else {
+        showToast((action === 'install' ? 'Установлено!' : 'Удалено!'));
+        // Refresh каталог чтобы badge обновился
+        await loadCatalog();
+        servicesCountsLoad();
+      }
+    }
+  } catch (_) { /* пропускаем */ }
+}
+
+function stopProgressUI() {
+  if (_progressTimer) { clearInterval(_progressTimer); _progressTimer = null; }
+  closeModal();
+}
+
+// Обновление через servicesCountsLoad (в шапке) — определяется на странице со счётчиком
+function servicesCountsLoad() { /* no-op на /services странице, обновление через loadCatalog */ }
 
 function closeModal() {
   document.getElementById('svc-modal').classList.remove('show');
