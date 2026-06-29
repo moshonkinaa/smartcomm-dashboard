@@ -554,12 +554,26 @@ def _install_worker(manifest):
                          catalog_version=str(manifest.get("schema_version", 1)))
 
     try:
-        # 1. Создать папку
+        # 1. Создать папку — через sudo т.к. /var/lib/smartcomm-services/ обычно
+        # owned root после install.sh. Сразу chown на текущего юзера чтобы
+        # дальнейшая работа не требовала sudo для записи в эту папку.
         sdir = _service_dir(sid)
-        sdir.mkdir(parents=True, exist_ok=True)
-        _progress_set(sid, log_line=f"  создана папка: {sdir}")
+        uid_gid = f"{os.getuid()}:{os.getgid()}"
+        r = subprocess.run(
+            ["sudo", "mkdir", "-p", str(sdir)],
+            capture_output=True, text=True, timeout=10
+        )
+        if r.returncode != 0:
+            raise RuntimeError(f"mkdir failed: {r.stderr.strip()[:200]}")
+        r = subprocess.run(
+            ["sudo", "chown", "-R", uid_gid, str(sdir)],
+            capture_output=True, text=True, timeout=10
+        )
+        if r.returncode != 0:
+            raise RuntimeError(f"chown failed: {r.stderr.strip()[:200]}")
+        _progress_set(sid, log_line=f"  создана папка: {sdir} (owner {uid_gid})")
 
-        # 2. Сгенерировать compose.yml
+        # 2. Сгенерировать compose.yml — теперь можно writeText без sudo
         compose_text = _render_compose(manifest)
         compose_path = sdir / "compose.yml"
         compose_path.write_text(compose_text, encoding="utf-8")

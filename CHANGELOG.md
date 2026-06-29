@@ -2,6 +2,14 @@
 
 Все значимые изменения проекта. Формат — Keep a Changelog + SemVer.
 
+## 1.6.1 — 2026-06-30
+
+**Hotfix v1.6.0** — установка падала с PermissionError.
+
+### Fixed
+- `_install_worker`: при создании папки `/var/lib/smartcomm-services/<id>/` падал с `PermissionError` потому что `/var/lib/smartcomm-services/` owned root, а python был от service-user (`cubi`/`pi`). Теперь сначала `sudo mkdir -p` + `sudo chown -R <uid>:<gid>` — после chown дальнейшая работа (запись compose.yml, etc) идёт без sudo.
+- Найдено первым же smoke-test'ом установки Uptime Kuma на Cubi.
+
 ## 1.6.0 — 2026-06-30
 
 **🛍 Магазин сервисов — Phase 2: реальная установка и удаление.**
