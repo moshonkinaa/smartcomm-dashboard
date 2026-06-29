@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Магазин сервисов — SmartComm</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231f3a68'/%3E%3Ctext x='16' y='22' font-family='-apple-system,Segoe UI,sans-serif' font-size='15' font-weight='700' text-anchor='middle' fill='white'%3ESC%3C/text%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231f3a68'/%3E%3Ctext x='16' y='22' font-family='-apple-system,Segoe UI,sans-serif' font-size='15' font-weight='700' text-anchor='middle' fill='white'%3ESC%3C/text%3E%3C/svg%3E">
 <link rel="manifest" href="/manifest.json">
 <style>
   :root {
@@ -262,22 +264,26 @@ function renderSummary() {
   const compat = _catalog.filter(s => s._compatible).length;
   const installed = _catalog.filter(s => s._installed).length;
   const running = _catalog.filter(s => s._installed && s._installed.status === 'running').length;
+  const stopped = installed - running;
+  const availToInstall = Math.max(0, compat - installed);
+  const notSuitable = total - compat;
+  const installedClass = installed > 0 ? 'ok' : '';
   const html = `
-    <div class="stat ok">
-      <div class="stat-val">${running}</div>
-      <div class="stat-label">запущено</div>
+    <div class="stat ${installedClass}">
+      <div class="stat-val">${installed}</div>
+      <div class="stat-label">установлено <span class="text-dim" style="font-size:11px">из них ${running} запущено${stopped > 0 ? ' · ' + stopped + ' остановлено' : ''}</span></div>
     </div>
     <div class="stat">
-      <div class="stat-val">${installed - running}</div>
-      <div class="stat-label">установлено (не запущено)</div>
-    </div>
-    <div class="stat">
-      <div class="stat-val">${compat}</div>
+      <div class="stat-val">${availToInstall}</div>
       <div class="stat-label">доступно к установке</div>
     </div>
     <div class="stat">
-      <div class="stat-val text-dim">${total - compat}</div>
+      <div class="stat-val text-dim">${notSuitable}</div>
       <div class="stat-label">не подойдёт вашему железу</div>
+    </div>
+    <div class="stat">
+      <div class="stat-val text-dim">${total}</div>
+      <div class="stat-label">всего в каталоге</div>
     </div>`;
   document.getElementById('summary').innerHTML = html;
 }
@@ -379,7 +385,6 @@ async function openServiceModal(id) {
         <p class="modal-tag">${escapeHtml(svc.tagline || '')}</p>
         <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;font-size:11px">
           <span class="badge cat cat-${escapeHtml(svc.category)}">${escapeHtml(CATEGORIES[svc.category] || svc.category)}</span>
-          ${svc.pricing_hint_rub ? `<span class="badge">~${svc.pricing_hint_rub} ₽/мес ценность для клиента</span>` : ''}
         </div>
       </div>
     </div>
@@ -772,7 +777,6 @@ function profileCard(p) {
         ${escapeHtml((p.description || '').split('\n').slice(0,2).join(' ').trim().slice(0, 140))}…
       </p>
       <div style="display: flex; gap: 6px; flex-wrap: wrap; font-size: 10.5px; padding-top: 8px; border-top: 1px solid var(--border);">
-        ${p.pricing_hint_rub ? `<span class="badge">~${p.pricing_hint_rub} ₽/мес ценность</span>` : ''}
         ${p.estimated_ram_mb ? `<span class="badge">${Math.round(p.estimated_ram_mb/1024 * 10)/10} GB RAM</span>` : ''}
         ${p.estimated_disk_gb ? `<span class="badge">${p.estimated_disk_gb} GB disk</span>` : ''}
       </div>
@@ -814,7 +818,6 @@ async function showProfileDetails(profileId) {
           <h2 class="modal-title">Пакет «${escapeHtml(p.name)}»</h2>
           <p class="modal-tag">${escapeHtml(p.tagline || '')}</p>
           <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;font-size:11px">
-            ${p.pricing_hint_rub ? `<span class="badge">~${p.pricing_hint_rub} ₽/мес ценность для клиента</span>` : ''}
             ${p.target_audience ? `<span class="badge">${escapeHtml(p.target_audience)}</span>` : ''}
           </div>
         </div>
