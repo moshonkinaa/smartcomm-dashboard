@@ -103,7 +103,7 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "1.4.0"
+VERSION = "1.4.1"
 RELEASE_DATE = "2026-06-27"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # Минимальная версия клиента (PWA/cache) с которой backend ещё совместим.
@@ -740,10 +740,65 @@ def button_recent_log(n=5):
 
 
 # ============ iRidium-specific info from OS ============
+#
+# iRidium 1.x на Raspbian запускается от обычного юзера → данные в /var/lib/iRidium Server/.
+# iRidium 2.x .deb на Debian запускается от root → данные в /root/iRidium Server/.
+# Auto-detect через /proc/<irserver_pid>/fd где какой .db файл реально открыт.
 
-IR_DOCS = "/var/lib/iRidium Server/Documents"
-IR_DB   = "/var/lib/iRidium Server/DataBase/IridiumStorageV4.db"
 IR_BIN  = "/iridiumserver/iridium"
+_IR_BASE_FALLBACKS = (
+    "/root/iRidium Server",          # iRidium 2.x от root
+    "/var/lib/iRidium Server",       # iRidium 1.x от user/pi
+    "/home/pi/iRidium Server",       # старый вариант если HOME=/home/pi
+)
+
+
+def _iridium_base_dir():
+    """Найти базовую директорию iRidium Server. Один раз за процесс.
+    Стратегия: lsof открытых файлов irserver-процесса → ищем 'iRidium Server'."""
+    try:
+        pid = sh("systemctl show -p MainPID --value irserver 2>/dev/null").strip()
+        if pid and pid != "0":
+            fd_dir = f"/proc/{pid}/fd"
+            try:
+                for fd in os.listdir(fd_dir):
+                    try:
+                        link = os.readlink(f"{fd_dir}/{fd}")
+                    except OSError:
+                        continue
+                    idx = link.find("/iRidium Server/")
+                    if idx >= 0:
+                        return link[:idx + len("/iRidium Server")]
+            except (PermissionError, OSError):
+                pass
+    except Exception:
+        pass
+    # Fallback: проверить известные пути на существование
+    for cand in _IR_BASE_FALLBACKS:
+        if os.path.isdir(cand):
+            return cand
+    return _IR_BASE_FALLBACKS[1]  # дефолт legacy путь
+
+
+_IR_BASE = None
+
+
+def iridium_paths():
+    """Возвращает (base, docs, db). Кеш — определяем один раз после старта,
+    т.к. пути не меняются пока irserver работает. Refresh при отсутствии."""
+    global _IR_BASE
+    if _IR_BASE is None or not os.path.isdir(_IR_BASE):
+        _IR_BASE = _iridium_base_dir()
+    return (
+        _IR_BASE,
+        f"{_IR_BASE}/Documents",
+        f"{_IR_BASE}/DataBase/IridiumStorageV4.db",
+    )
+
+
+# Legacy aliases — теперь динамика
+def _ir_docs(): return iridium_paths()[1]
+def _ir_db():   return iridium_paths()[2]
 
 
 @lru_cache(maxsize=1)
@@ -764,9 +819,10 @@ def iridium_project_info():
     .irpz (which is a zip archive with Project.xml or similar)."""
     import zipfile
     try:
-        for fn in sorted(os.listdir(IR_DOCS)):
+        docs = _ir_docs()
+        for fn in sorted(os.listdir(docs)):
             if fn.startswith("Project_") and fn.endswith(".irpz"):
-                path = os.path.join(IR_DOCS, fn)
+                path = os.path.join(docs, fn)
                 info = {
                     "name": fn[:-5],
                     "filename": fn,
@@ -837,7 +893,7 @@ def iridium_clients_count():
 @time_cache(60)
 def iridium_db_size():
     try:
-        return os.path.getsize(IR_DB)
+        return os.path.getsize(_ir_db())
     except (FileNotFoundError, PermissionError):
         return None
 

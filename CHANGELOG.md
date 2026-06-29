@@ -2,6 +2,24 @@
 
 Все значимые изменения проекта. Формат — Keep a Changelog + SemVer.
 
+## 1.4.1 — 2026-06-29
+
+**Hotfix v1.4.0** — auto-detect путей iRidium Server (разные версии iRidium держат данные в разных местах).
+
+### Fixed
+- **`iridium_project_info()` и `iridium_db_size()` возвращали None на Cubi 5** — потому что захардкожен путь `/var/lib/iRidium Server/Documents/` (iRidium 1.x) а Cubi с iRidium **2.3.86 .deb запускается от root** → реальный путь `/root/iRidium Server/DataBase/IridiumStorageV4.db`. Это означало что плитка «iRidium · детали» на Cubi не показывала размер БД и friendly_name проекта.
+- Также фикшу `primary_iface()` который кешировал `eth0` fallback на 60с при раннем boot когда default route ещё не настроен (попал в v1.4.0 как hotfix отдельным коммитом)
+
+### Added
+- `iridium_paths()` — auto-detect через `/proc/<irserver_pid>/fd` (lsof открытых файлов с подстрокой `iRidium Server`). Кешируется на жизнь процесса дашборда (refresh при отсутствии).
+- Fallback chain если auto-detect не сработал: `/root/iRidium Server` → `/var/lib/iRidium Server` → `/home/pi/iRidium Server`
+
+### Why
+Cross-platform compare между Pi (95.167, iRidium 1.3.87) и Cubi (101.12, iRidium 2.3.86) показал что 9 полей в `/api/status` различаются. Корень из 9 — этот один баг с путями. Остальные различия — нормальные (Pi имеет 4 ядра CPU vs Cubi 12, разные подсети, hostname, и т.п.). Frontend gracefully обрабатывает `null` для Pi-specific fields (sdcard, voltage, fan_pct), эти места не трогали.
+
+### Совместимость
+Полная backward-compat. На Pi auto-detect найдёт ту же `/var/lib/iRidium Server/` что и раньше через lsof, либо fallback chain. На Cubi теперь корректно находит `/root/iRidium Server/`.
+
 ## 1.4.0 — 2026-06-29
 
 **Multi-platform support** — дашборд теперь работает не только на Raspberry Pi, но и на x86 (Intel/AMD неттопы). Связано с разворачиванием первого production-контроллера MSI Cubi 5.
