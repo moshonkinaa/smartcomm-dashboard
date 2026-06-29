@@ -2,6 +2,38 @@
 
 Все значимые изменения проекта. Формат — Keep a Changelog + SemVer.
 
+## 1.4.3 — 2026-06-29
+
+Фильтр известного firmware-шума в плитке «dmesg ошибки».
+
+### Why
+На MSI Cubi 5 (MS-B0A8) BIOS-баг: ACPI-методы `_SB.PC00.SEN1._TMP` и `_SB.PC00.TFN1._FST` ссылаются на несуществующий символ `.MPAG`. Каждые ~10 секунд Linux пытается прочитать температуру через эти методы → генерирует `ACPI BIOS Error` / `ACPI Error: Aborting method`. Дашборд показывал «dmesg: 5 ошибок» (warn-плитка) — но это **БАГ ПРОШИВКИ**, не системы, **не actionable** администратором. CPU температура читается корректно через coretemp (MSR), кулер управляется BIOS — реального ущерба нет.
+
+### Fixed — фильтрация в `dmesg_errors()`
+- Известные firmware-bug паттерны исключаются из счёта **«реальных»** ошибок:
+  - `ACPI BIOS Error`
+  - `ACPI Error: Aborting method`
+  - `Unable to get temperature, disabling` (производная от первых двух)
+  - `Disabled thermal zone with critical trip point` (Linux отключает зону когда _TMP не работает)
+- Добавлен `dmesg_firmware_noise_count()` — отдельный счётчик известного шума
+- Плитка теперь показывает: **«dmesg · без реальных ошибок · N известных BIOS-шумов отфильтровано»** (`ok` зелёная вместо `warn` оранжевой)
+- Если придут НАСТОЯЩИЕ ошибки (например проблемы с диском, OOM-killer, RAID) — они НЕ фильтруются, показываются как раньше
+
+### Дополнительно — для Cubi 5 и подобных MSI
+На контроллере [Cubi-101.12]:
+```
+/etc/modprobe.d/blacklist-int3400.conf
+  blacklist int3400_thermal
+  blacklist int340x_thermal_zone   # подгружается через зависимости — не помогает полностью
+  blacklist int3402_thermal
+  blacklist int3403_thermal
+  blacklist intel_pch_thermal
+```
+Результат: ACPI BIOS errors 40 → 4 (90% уменьшение). Оставшиеся 4 — `TFN1._FST` через зависимый `int340x_thermal_zone`. С фильтром этого релиза эти 4 не считаются ошибками.
+
+### Совместимость
+Полная backward-compat. На платформах БЕЗ firmware-шума — поведение идентично (фильтр не находит совпадений, всё ошибки показываются как раньше).
+
 ## 1.4.2 — 2026-06-29
 
 Два cross-platform бага найдены при сравнении Pi vs Cubi на разных подсетях.

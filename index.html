@@ -1159,7 +1159,12 @@ function renderHealth(h, throttle) {
   }
 
   if (h.dmesg_errors.length === 0) {
-    items.push(healthRow('ok', 'dmesg', 'без критичных ошибок'));
+    const noiseCount = h.dmesg_firmware_noise || 0;
+    if (noiseCount > 0) {
+      items.push(healthRow('ok', 'dmesg', 'без реальных ошибок · ' + noiseCount + ' известных BIOS-шумов отфильтровано'));
+    } else {
+      items.push(healthRow('ok', 'dmesg', 'без критичных ошибок'));
+    }
   } else {
     items.push(healthRow('warn', 'dmesg: ' + h.dmesg_errors.length + ' ошибок', 'см. ниже'));
   }

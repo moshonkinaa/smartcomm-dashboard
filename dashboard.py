@@ -103,7 +103,7 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "1.4.2"
+VERSION = "1.4.3"
 RELEASE_DATE = "2026-06-27"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # Минимальная версия клиента (PWA/cache) с которой backend ещё совместим.
@@ -1193,12 +1193,47 @@ def reboot_required_info():
     return {"required": True, "pkgs": pkgs}
 
 
+# Шаблоны kernel-сообщений которые ТЕХНИЧЕСКИ err/crit, но являются
+# известными low-priority firmware-багами (Linux мог бы их не log-ировать как err,
+# но логирует, потому что строго следует ACPI спеке). Не actionable администратором.
+# Если приходит новая платформа с новым «шумом» — добавлять сюда.
+_DMESG_KNOWN_FIRMWARE_NOISE = (
+    # MSI Cubi 5 1M (и подобные) BIOS bug: ACPI _TMP/_FST ссылаются на
+    # несуществующие методы. Linux пытается их вызвать → "Could not resolve".
+    "ACPI BIOS Error",
+    "ACPI Error: Aborting method",
+    # Производная — отключение thermal zone когда _TMP не работает
+    "Unable to get temperature, disabling",
+    "Disabled thermal zone with critical trip point",
+)
+
+
+def _is_firmware_noise(line):
+    """True если строка — известный firmware шум, не actionable."""
+    return any(p in line for p in _DMESG_KNOWN_FIRMWARE_NOISE)
+
+
 def dmesg_errors(n=5):
+    """Последние n РЕАЛЬНЫХ ошибок dmesg (err/crit/alert/emerg).
+    Известный firmware-шум (ACPI BIOS Errors на некоторых MSI/Intel платформах)
+    исключается — это БАГ ПРОШИВКИ, не системы; пользователь ничего с этим
+    сделать не может. Возвращаем только actionable ошибки."""
+    # Берём БОЛЬШЕ строк чем n, чтобы после фильтрации осталось n реальных
     out = sh(
-        f"sudo dmesg -l err,crit,alert,emerg --color=never -T 2>/dev/null | tail -{n}",
+        "sudo dmesg -l err,crit,alert,emerg --color=never -T 2>/dev/null | tail -50",
         timeout=10,
     )
-    return [ln for ln in out.splitlines() if ln.strip()]
+    real = [ln for ln in out.splitlines() if ln.strip() and not _is_firmware_noise(ln)]
+    return real[-n:]
+
+
+def dmesg_firmware_noise_count():
+    """Сколько firmware-bug сообщений в dmesg. Информативно — не считаются ошибками."""
+    out = sh(
+        "sudo dmesg -l err,crit,alert,emerg --color=never 2>/dev/null",
+        timeout=10,
+    )
+    return sum(1 for ln in out.splitlines() if _is_firmware_noise(ln))
 
 
 def root_block_device():
@@ -1317,6 +1352,7 @@ def health_summary():
             "fresh": _UPDATES["ok"],
         },
         "dmesg_errors": dmesg_errors(5),
+        "dmesg_firmware_noise": dmesg_firmware_noise_count(),
         "sdcard": sdcard_health(),
     }
     _HEALTH["ts"] = now
