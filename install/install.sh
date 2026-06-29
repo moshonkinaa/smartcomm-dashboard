@@ -43,7 +43,7 @@ if ! id "$SVC_USER" >/dev/null 2>&1; then
   exit 1
 fi
 
-REQUIRED_FILES=(dashboard.py network.py mikrotik.py index.html network.html login.html chart.min.js manifest.json sw.js smartcomm-dashboard.service)
+REQUIRED_FILES=(dashboard.py network.py mikrotik.py services.py index.html network.html services.html login.html chart.min.js manifest.json sw.js smartcomm-dashboard.service)
 OPTIONAL_FILES=(CHANGELOG.md marked.min.js)
 for f in "${REQUIRED_FILES[@]}"; do
   if [ ! -f "$SRC_DIR/$f" ]; then
@@ -68,12 +68,14 @@ NEED=""
 dpkg -s python3-flask          >/dev/null 2>&1 || NEED="$NEED python3-flask"
 dpkg -s python3-flask-compress >/dev/null 2>&1 || NEED="$NEED python3-flask-compress"
 dpkg -s python3-waitress       >/dev/null 2>&1 || NEED="$NEED python3-waitress"
+dpkg -s python3-yaml           >/dev/null 2>&1 || NEED="$NEED python3-yaml"
 dpkg -s nmap                   >/dev/null 2>&1 || NEED="$NEED nmap"
 dpkg -s snmp                   >/dev/null 2>&1 || NEED="$NEED snmp"
 dpkg -s avahi-utils            >/dev/null 2>&1 || NEED="$NEED avahi-utils"
 dpkg -s mmc-utils              >/dev/null 2>&1 || NEED="$NEED mmc-utils"
 dpkg -s iputils-ping           >/dev/null 2>&1 || NEED="$NEED iputils-ping"
 dpkg -s curl                   >/dev/null 2>&1 || NEED="$NEED curl"
+dpkg -s git                    >/dev/null 2>&1 || NEED="$NEED git"
 if [ -n "$NEED" ]; then
   echo "  ставим:$NEED"
   apt-get update -qq
@@ -106,7 +108,7 @@ echo "  $APP_DIR + $DATA_DIR готовы"
 # ===== 4. Копирование файлов =====
 echo ""
 echo "[4/6] Копируем файлы дашборда → $APP_DIR/"
-for f in dashboard.py network.py mikrotik.py index.html network.html login.html chart.min.js manifest.json sw.js; do
+for f in dashboard.py network.py mikrotik.py services.py index.html network.html services.html login.html chart.min.js manifest.json sw.js; do
   cp "$SRC_DIR/$f" "$APP_DIR/$f"
   chmod 644 "$APP_DIR/$f"
 done
@@ -127,6 +129,22 @@ echo "[5/6] Проверка синтаксиса Python"
 python3 -m py_compile "$APP_DIR/dashboard.py" && echo "  dashboard.py — OK"
 python3 -m py_compile "$APP_DIR/network.py"   && echo "  network.py — OK"
 python3 -m py_compile "$APP_DIR/mikrotik.py"  && echo "  mikrotik.py — OK"
+python3 -m py_compile "$APP_DIR/services.py"  && echo "  services.py — OK"
+
+# ===== Клон каталога сервисов (v1.5.0+) =====
+CATALOG_DIR="/opt/smartcomm-services-catalog"
+echo ""
+echo "[5.5] Каталог сервисов (для магазина)"
+if [ -d "$CATALOG_DIR/.git" ]; then
+  echo "  $CATALOG_DIR уже есть, git pull"
+  git -C "$CATALOG_DIR" pull --quiet || echo "  warn: git pull failed (продолжаю)"
+else
+  echo "  клонирую smartcomm-services-catalog → $CATALOG_DIR"
+  git clone --depth=1 https://github.com/moshonkinaa/smartcomm-services-catalog.git "$CATALOG_DIR" || \
+    echo "  warn: clone failed — каталог пустой, обновится через UI"
+fi
+mkdir -p /var/lib/smartcomm-services
+chown -R "$SVC_USER:$SVC_GROUP" /var/lib/smartcomm-services
 
 # ===== 6. Platform-specific fixes (опциональные, по DMI vendor/product) =====
 # База: blacklist Intel DPTF на MSI Cubi 5 — там BIOS-баг с _SB.PC00.SEN1._TMP.MPAG

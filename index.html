@@ -341,6 +341,10 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="18" r="2.5"/><circle cx="12" cy="12" r="2.5"/></svg>
           Карта сети
         </button>
+        <button class="btn-action c-blue" onclick="location.href='/services'" title="Магазин сервисов для контроллера">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M2 7l3-5h14l3 5"/><path d="M2 7v13a1 1 0 0 0 1 1h18a1 1 0 0 0 1-1V7"/><path d="M2 7h20"/><path d="M9 13h6"/></svg>
+          <span id="svc-btn-label">Сервисы</span>
+        </button>
         <button class="btn-action c-mute" id="btn-users" style="display:none" onclick="showUsersModal()" title="Пользователи и аудит-лог (только админ)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
           Пользователи
@@ -2313,7 +2317,27 @@ window.addEventListener('DOMContentLoaded', () => {
   versionLoad();
   // Periodic version check — если backend обновился, покажем toast «обнови страницу»
   setInterval(versionLoad, 60000);
+  servicesCountsLoad();
+  setInterval(servicesCountsLoad, 30000);
 });
+
+// ===== Магазин сервисов — счётчик в шапке =====
+async function servicesCountsLoad() {
+  try {
+    const r = await fetch('/api/services/counts');
+    if (!r.ok) return;
+    const c = await r.json();
+    const lbl = document.getElementById('svc-btn-label');
+    if (!lbl) return;
+    if (c.installed === 0) {
+      lbl.textContent = `Сервисы · ${c.catalog} в магазине`;
+    } else if (c.error > 0) {
+      lbl.textContent = `Сервисы · ${c.running}↑ · ${c.error} ошибок`;
+    } else {
+      lbl.textContent = `Сервисы · ${c.running}/${c.installed}`;
+    }
+  } catch (_) { /* пропускаем — не критично */ }
+}
 </script>
 </body>
 </html>

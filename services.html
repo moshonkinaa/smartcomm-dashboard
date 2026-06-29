@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Магазин сервисов — SmartComm</title>
+<link rel="manifest" href="/manifest.json">
+<style>
+  :root {
+    --r-sm: 6px; --r-md: 9px; --r-lg: 14px;
+    --bg: #ffffff; --bg-card: #f7f8fa; --bg-inner: #ffffff; --bg-hover: #eef0f4;
+    --border: #e3e6ec; --text: #1a1f2c; --text-muted: #6a7383; --text-dim: #9aa1ad;
+    --accent: #1f3a68; --ok: #1D9E75; --warn: #EF9F27; --err: #E24B4A;
+    --info: #378ADD; --purple: #7F77DD;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1116; --bg-card: #181c24; --bg-inner: #11141b; --bg-hover: #232833;
+      --border: #2a3140; --text: #e6eaf2; --text-muted: #9aa3b0; --text-dim: #707582;
+      --accent: #6da8ff; --ok: #4ec894; --warn: #f2b04e; --err: #ff6b6b;
+      --info: #6da8ff; --purple: #a0a0ff;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 14px; font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); font-size: 13.5px; line-height: 1.5; }
+
+  /* Utility (синхронно с index.html) */
+  .hidden { display: none !important; }
+  .flex { display: flex; }
+  .flex-col { display: flex; flex-direction: column; }
+  .items-center { align-items: center; }
+  .justify-between { justify-content: space-between; }
+  .gap-1 { gap: 4px; } .gap-2 { gap: 8px; } .gap-3 { gap: 12px; }
+  .mt-2 { margin-top: 8px; } .mt-3 { margin-top: 12px; }
+  .text-muted { color: var(--text-muted); }
+  .text-dim { color: var(--text-dim); }
+  .text-ok { color: var(--ok); }
+  .text-warn { color: var(--warn); }
+  .text-err { color: var(--err); }
+  .fs-xs { font-size: 11px; } .fs-sm { font-size: 11.5px; } .fs-md { font-size: 12.5px; }
+
+  .header { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r-lg); margin-bottom: 14px; gap: 12px; flex-wrap: wrap; }
+  h1 { margin: 0; font-size: 17px; font-weight: 500; }
+  .header-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .btn-action { padding: 7px 13px; font: inherit; font-size: 12.5px; font-weight: 500; color: var(--text); background: var(--bg-inner); border: 1px solid var(--border); border-radius: var(--r-md); cursor: pointer; display: inline-flex; align-items: center; gap: 5px; -webkit-tap-highlight-color: transparent; }
+  .btn-action:hover { background: var(--bg-hover); }
+  .btn-action svg { width: 13px; height: 13px; }
+  .btn-action.c-mute { color: var(--text-muted); border-color: var(--border); }
+  .btn-action.c-purple { background: rgba(127,119,221,0.12); border-color: rgba(127,119,221,0.4); color: var(--purple); }
+  .btn-action.c-blue   { background: rgba(55,138,221,0.12); border-color: rgba(55,138,221,0.4); color: var(--info); }
+
+  /* Stats summary */
+  .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .stat { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r-md); padding: 10px 14px; }
+  .stat-val { font-size: 22px; font-weight: 500; line-height: 1.1; }
+  .stat-label { font-size: 11.5px; color: var(--text-muted); margin-top: 4px; }
+  .stat.ok .stat-val { color: var(--ok); }
+  .stat.warn .stat-val { color: var(--warn); }
+  .stat.err .stat-val { color: var(--err); }
+
+  /* Filters */
+  .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; align-items: center; }
+  .chip { padding: 5px 12px; font-size: 11.5px; border-radius: 14px; background: var(--bg-inner); border: 1px solid var(--border); color: var(--text-muted); cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent; }
+  .chip.active { background: rgba(55,138,221,0.15); border-color: rgba(55,138,221,0.4); color: var(--info); font-weight: 500; }
+  .chip:hover:not(.active) { background: var(--bg-hover); }
+  .search { flex: 1; min-width: 200px; padding: 7px 11px; font: inherit; font-size: 12.5px; background: var(--bg-inner); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-md); }
+  .search:focus { outline: 1px solid var(--accent); }
+
+  /* Catalog grid */
+  .catalog { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 12px; }
+  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 14px; display: flex; flex-direction: column; cursor: pointer; transition: border-color 0.15s, transform 0.1s; }
+  .card:hover { border-color: var(--accent); }
+  .card:active { transform: scale(0.99); }
+  .card.installed { border-color: rgba(29,158,117,0.4); }
+  .card.installed.running { background: rgba(29,158,117,0.06); }
+  .card.incompat { opacity: 0.55; }
+  .card.incompat:hover { border-color: var(--border); cursor: not-allowed; }
+  .card-head { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 8px; }
+  .card-icon { width: 38px; height: 38px; flex-shrink: 0; background: var(--bg-inner); border: 1px solid var(--border); border-radius: 9px; display: flex; align-items: center; justify-content: center; font-size: 18px; }
+  .card-title-block { flex: 1; min-width: 0; }
+  .card-name { font-size: 14px; font-weight: 500; margin: 0; }
+  .card-tag { font-size: 11.5px; color: var(--text-muted); margin: 2px 0 0; }
+  .card-desc { font-size: 12px; color: var(--text-muted); line-height: 1.4; margin: 6px 0 10px; flex: 1; }
+  .card-meta { display: flex; gap: 8px; flex-wrap: wrap; font-size: 10.5px; color: var(--text-dim); padding-top: 8px; border-top: 1px solid var(--border); }
+  .badge { padding: 2px 7px; border-radius: 10px; background: var(--bg-inner); border: 1px solid var(--border); }
+  .badge.cat { font-weight: 500; }
+  .badge.cat-vpn { color: var(--purple); border-color: rgba(127,119,221,0.4); background: rgba(127,119,221,0.1); }
+  .badge.cat-ai { color: var(--info); border-color: rgba(55,138,221,0.4); background: rgba(55,138,221,0.1); }
+  .badge.cat-media { color: var(--warn); border-color: rgba(239,159,39,0.4); background: rgba(239,159,39,0.1); }
+  .badge.cat-photo { color: var(--purple); border-color: rgba(127,119,221,0.4); background: rgba(127,119,221,0.1); }
+  .badge.cat-cloud { color: var(--info); border-color: rgba(55,138,221,0.4); background: rgba(55,138,221,0.1); }
+  .badge.cat-security { color: var(--ok); border-color: rgba(29,158,117,0.4); background: rgba(29,158,117,0.1); }
+  .badge.cat-smart-home { color: var(--warn); border-color: rgba(239,159,39,0.4); background: rgba(239,159,39,0.1); }
+  .badge.cat-automation { color: var(--info); border-color: rgba(55,138,221,0.4); background: rgba(55,138,221,0.1); }
+  .badge.cat-admin { color: var(--text-muted); }
+  .badge.installed { color: var(--ok); border-color: rgba(29,158,117,0.4); background: rgba(29,158,117,0.15); font-weight: 500; }
+  .badge.running { color: var(--ok); border-color: rgba(29,158,117,0.6); background: rgba(29,158,117,0.25); font-weight: 500; }
+  .badge.error { color: var(--err); border-color: rgba(226,75,74,0.4); background: rgba(226,75,74,0.15); }
+  .badge.incompat { color: var(--text-dim); }
+
+  /* Empty catalog state */
+  .empty { padding: 40px; text-align: center; color: var(--text-muted); background: var(--bg-card); border: 1px dashed var(--border); border-radius: var(--r-lg); }
+
+  /* Modal */
+  .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.55); display: none; z-index: 100; padding: 20px; }
+  .modal-backdrop.show { display: flex; align-items: center; justify-content: center; overflow-y: auto; }
+  .modal-box { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 22px; max-width: 620px; width: 100%; max-height: 90vh; overflow-y: auto; }
+  .modal-head { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 14px; }
+  .modal-icon { width: 48px; height: 48px; flex-shrink: 0; background: var(--bg-inner); border: 1px solid var(--border); border-radius: 11px; display: flex; align-items: center; justify-content: center; font-size: 24px; }
+  .modal-title { margin: 0; font-size: 18px; font-weight: 500; }
+  .modal-tag { margin: 3px 0 0; font-size: 12.5px; color: var(--text-muted); }
+  .modal-section { margin-top: 18px; }
+  .modal-section h3 { margin: 0 0 8px; font-size: 13px; font-weight: 500; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .req-list { list-style: none; padding: 0; margin: 0; }
+  .req-list li { padding: 4px 0; font-size: 12.5px; }
+  .req-list li.ok::before { content: '✓ '; color: var(--ok); }
+  .req-list li.bad::before { content: '✗ '; color: var(--err); }
+  .features-list { padding-left: 18px; margin: 0; font-size: 12.5px; }
+  .features-list li { padding: 2px 0; }
+  pre.post-install { background: var(--bg-inner); border: 1px solid var(--border); border-radius: var(--r-md); padding: 10px 12px; font-size: 11.5px; font-family: var(--mono); white-space: pre-wrap; overflow-x: auto; line-height: 1.5; }
+  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; flex-wrap: wrap; }
+  .btn-close { padding: 8px 18px; font: inherit; font-size: 13px; font-weight: 500; color: var(--text); background: transparent; border: 1px solid var(--border); border-radius: 9px; cursor: pointer; }
+  .btn-close:hover { background: var(--bg-hover); }
+  .btn-primary { padding: 8px 18px; font: inherit; font-size: 13px; font-weight: 500; color: white; background: var(--accent); border: 1px solid var(--accent); border-radius: 9px; cursor: pointer; }
+  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-primary:hover:not(:disabled) { filter: brightness(1.1); }
+
+  .docs-link { display: inline-flex; gap: 4px; align-items: center; color: var(--info); text-decoration: none; font-size: 12px; padding-top: 6px; }
+  .docs-link:hover { text-decoration: underline; }
+
+  @media (max-width: 600px) {
+    .catalog { grid-template-columns: 1fr; }
+    body { padding: 10px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>🛍 Магазин сервисов SmartComm</h1>
+    <p style="margin: 4px 0 0; font-size: 12px; color: var(--text-muted);" id="hdr-meta">…</p>
+  </div>
+  <div class="header-actions">
+    <button class="btn-action c-mute" onclick="location.href='/'">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>
+      На дашборд
+    </button>
+    <button class="btn-action c-mute" id="btn-refresh" onclick="refreshCatalog()" title="git pull каталога с GitHub">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>
+      Обновить каталог
+    </button>
+  </div>
+</div>
+
+<div class="summary" id="summary">
+  <!-- заполняется JS -->
+</div>
+
+<div class="filters">
+  <input type="search" class="search" id="search" placeholder="🔍 Поиск по сервисам..." oninput="renderCatalog()">
+  <span class="chip active" data-cat="all" onclick="filterCat('all')">Все</span>
+  <span class="chip" data-cat="vpn" onclick="filterCat('vpn')">🔐 VPN</span>
+  <span class="chip" data-cat="ai" onclick="filterCat('ai')">🤖 AI</span>
+  <span class="chip" data-cat="media" onclick="filterCat('media')">🎬 Медиа</span>
+  <span class="chip" data-cat="photo" onclick="filterCat('photo')">📸 Фото</span>
+  <span class="chip" data-cat="cloud" onclick="filterCat('cloud')">☁️ Облако</span>
+  <span class="chip" data-cat="security" onclick="filterCat('security')">🛡 Защита</span>
+  <span class="chip" data-cat="smart-home" onclick="filterCat('smart-home')">🏠 Умный дом</span>
+  <span class="chip" data-cat="automation" onclick="filterCat('automation')">⚙ Автоматизация</span>
+  <span class="chip" data-cat="admin" onclick="filterCat('admin')">🛠 Админ</span>
+</div>
+
+<div class="catalog" id="catalog">
+  <div class="empty">Загрузка каталога…</div>
+</div>
+
+<!-- Modal детали сервиса -->
+<div class="modal-backdrop" id="svc-modal" onclick="if(event.target===this)closeModal()">
+  <div class="modal-box" id="svc-modal-body" onclick="event.stopPropagation()">
+    <!-- заполняется JS -->
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast" style="position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--bg-card);border:1px solid var(--border);border-radius:9px;padding:10px 18px;font-size:12.5px;display:none;z-index:200;box-shadow:0 4px 12px rgba(0,0,0,0.18)"></div>
+
+<script>
+const CATEGORIES = {
+  vpn: '🔐 VPN и обход блокировок',
+  ai: '🤖 Искусственный интеллект',
+  media: '🎬 Стриминг и медиа',
+  photo: '📸 Фото',
+  cloud: '☁️ Облако и продуктивность',
+  security: '🛡 Безопасность',
+  'smart-home': '🏠 Умный дом',
+  automation: '⚙ Автоматизация',
+  admin: '🛠 Админские инструменты',
+};
+
+let _catalog = [];
+let _platform = {};
+let _currentFilter = 'all';
+let _currentService = null;  // открытая в модалке
+
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function showToast(msg, isErr) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.borderColor = isErr ? 'rgba(226,75,74,0.5)' : 'var(--border)';
+  t.style.display = 'block';
+  setTimeout(() => t.style.display = 'none', 3500);
+}
+
+async function loadCatalog() {
+  try {
+    const r = await fetch('/api/services/catalog');
+    if (!r.ok) { showToast('Ошибка загрузки каталога: HTTP ' + r.status, true); return; }
+    const j = await r.json();
+    if (!j.ok) { showToast('Backend: ' + (j.error || 'unknown'), true); return; }
+    _catalog = j.services || [];
+    _platform = {
+      arch: j.platform_arch,
+      ram: j.ram_mb,
+      disk: j.disk_free_gb,
+      cs: j.catalog_status || {},
+    };
+    renderSummary();
+    renderHeaderMeta();
+    renderCatalog();
+  } catch (e) {
+    showToast('Сетевая ошибка: ' + e.message, true);
+  }
+}
+
+function renderHeaderMeta() {
+  const cs = _platform.cs || {};
+  const meta = document.getElementById('hdr-meta');
+  const parts = [];
+  parts.push('Платформа: <b>' + escapeHtml(_platform.arch || '?') + '</b>');
+  parts.push('RAM: <b>' + Math.round((_platform.ram || 0) / 1024 * 10) / 10 + ' GB</b>');
+  parts.push('Свободно: <b>' + (_platform.disk || 0) + ' GB</b>');
+  if (cs.git_sha) parts.push('Каталог: <span class="text-dim">' + escapeHtml(cs.git_sha) + '</span>');
+  meta.innerHTML = parts.join(' · ');
+}
+
+function renderSummary() {
+  const total = _catalog.length;
+  const compat = _catalog.filter(s => s._compatible).length;
+  const installed = _catalog.filter(s => s._installed).length;
+  const running = _catalog.filter(s => s._installed && s._installed.status === 'running').length;
+  const html = `
+    <div class="stat ok">
+      <div class="stat-val">${running}</div>
+      <div class="stat-label">запущено</div>
+    </div>
+    <div class="stat">
+      <div class="stat-val">${installed - running}</div>
+      <div class="stat-label">установлено (не запущено)</div>
+    </div>
+    <div class="stat">
+      <div class="stat-val">${compat}</div>
+      <div class="stat-label">доступно к установке</div>
+    </div>
+    <div class="stat">
+      <div class="stat-val text-dim">${total - compat}</div>
+      <div class="stat-label">не подойдёт вашему железу</div>
+    </div>`;
+  document.getElementById('summary').innerHTML = html;
+}
+
+function filterCat(cat) {
+  _currentFilter = cat;
+  document.querySelectorAll('.chip[data-cat]').forEach(c => {
+    c.classList.toggle('active', c.dataset.cat === cat);
+  });
+  renderCatalog();
+}
+
+function renderCatalog() {
+  const search = document.getElementById('search').value.trim().toLowerCase();
+  const filtered = _catalog.filter(s => {
+    if (_currentFilter !== 'all' && s.category !== _currentFilter) return false;
+    if (search) {
+      const haystack = (s.name + ' ' + s.tagline + ' ' + (s.description || '')).toLowerCase();
+      if (!haystack.includes(search)) return false;
+    }
+    return true;
+  });
+  // Сортировка: installed-running → installed-stopped → compat → incompat
+  filtered.sort((a, b) => {
+    const score = (s) => {
+      if (s._installed && s._installed.status === 'running') return 0;
+      if (s._installed) return 1;
+      if (s._compatible) return 2;
+      return 3;
+    };
+    const d = score(a) - score(b);
+    if (d !== 0) return d;
+    return a.name.localeCompare(b.name);
+  });
+
+  const container = document.getElementById('catalog');
+  if (filtered.length === 0) {
+    container.innerHTML = '<div class="empty">Нет сервисов под этот фильтр</div>';
+    return;
+  }
+  container.innerHTML = filtered.map(s => cardHtml(s)).join('');
+}
+
+function cardHtml(s) {
+  const inst = s._installed;
+  let statusBadge = '';
+  let cardClass = 'card';
+  if (inst) {
+    cardClass += ' installed';
+    if (inst.status === 'running') {
+      cardClass += ' running';
+      statusBadge = '<span class="badge running">● запущен</span>';
+    } else if (inst.status === 'error') {
+      statusBadge = '<span class="badge error">⚠ ошибка</span>';
+    } else {
+      statusBadge = '<span class="badge installed">установлен</span>';
+    }
+  } else if (!s._compatible) {
+    cardClass += ' incompat';
+    statusBadge = '<span class="badge incompat">не для вашего железа</span>';
+  }
+  const reqs = s.requirements || {};
+  const ramGb = reqs.min_ram_mb ? (Math.round(reqs.min_ram_mb / 1024 * 10) / 10 + ' GB RAM') : '';
+  const diskGb = reqs.min_disk_gb ? (reqs.min_disk_gb + ' GB disk') : '';
+  return `
+    <div class="${cardClass}" onclick="openServiceModal('${escapeHtml(s.id)}')">
+      <div class="card-head">
+        <div class="card-icon">${categoryIcon(s.category)}</div>
+        <div class="card-title-block">
+          <p class="card-name">${escapeHtml(s.name)}</p>
+          <p class="card-tag">${escapeHtml(s.tagline || '')}</p>
+        </div>
+      </div>
+      <p class="card-desc">${escapeHtml((s.description || '').split('\n')[0].slice(0, 120))}</p>
+      <div class="card-meta">
+        <span class="badge cat cat-${escapeHtml(s.category)}">${escapeHtml(s.category)}</span>
+        ${ramGb ? `<span class="badge">${ramGb}</span>` : ''}
+        ${diskGb ? `<span class="badge">${diskGb}</span>` : ''}
+        ${statusBadge}
+      </div>
+    </div>`;
+}
+
+function categoryIcon(cat) {
+  const map = { vpn: '🔐', ai: '🤖', media: '🎬', photo: '📸', cloud: '☁️', security: '🛡', 'smart-home': '🏠', automation: '⚙', admin: '🛠' };
+  return map[cat] || '📦';
+}
+
+async function openServiceModal(id) {
+  const svc = _catalog.find(s => s.id === id);
+  if (!svc) return;
+  _currentService = svc;
+  const body = document.getElementById('svc-modal-body');
+  body.innerHTML = `
+    <div class="modal-head">
+      <div class="modal-icon">${categoryIcon(svc.category)}</div>
+      <div style="flex:1">
+        <h2 class="modal-title">${escapeHtml(svc.name)}</h2>
+        <p class="modal-tag">${escapeHtml(svc.tagline || '')}</p>
+        <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;font-size:11px">
+          <span class="badge cat cat-${escapeHtml(svc.category)}">${escapeHtml(CATEGORIES[svc.category] || svc.category)}</span>
+          ${svc.pricing_hint_rub ? `<span class="badge">~${svc.pricing_hint_rub} ₽/мес ценность для клиента</span>` : ''}
+        </div>
+      </div>
+    </div>
+    <div class="modal-section">
+      <h3>Описание</h3>
+      <div style="white-space:pre-wrap;font-size:12.5px;line-height:1.55">${escapeHtml(svc.description || '')}</div>
+    </div>
+    ${svc.features && svc.features.length ? `
+    <div class="modal-section">
+      <h3>Возможности</h3>
+      <ul class="features-list">${svc.features.map(f => '<li>' + escapeHtml(f) + '</li>').join('')}</ul>
+    </div>` : ''}
+    <div class="modal-section" id="precheck-section">
+      <h3>Проверка перед установкой</h3>
+      <div class="text-muted fs-sm">Проверяю совместимость…</div>
+    </div>
+    ${svc.post_install ? `
+    <div class="modal-section">
+      <h3>После установки</h3>
+      <pre class="post-install">${escapeHtml(svc.post_install)}</pre>
+    </div>` : ''}
+    ${svc.docs_url ? `<a class="docs-link" href="${escapeHtml(svc.docs_url)}" target="_blank" rel="noopener">📖 Документация ↗</a>` : ''}
+    <div class="modal-actions">
+      <button class="btn-close" onclick="closeModal()">Закрыть</button>
+      <button class="btn-primary" id="install-btn" disabled onclick="installService('${escapeHtml(svc.id)}')">Установить</button>
+    </div>`;
+  document.getElementById('svc-modal').classList.add('show');
+  // Параллельно дёргаем pre-check
+  loadPreCheck(svc.id);
+}
+
+async function loadPreCheck(id) {
+  const sect = document.getElementById('precheck-section');
+  try {
+    const r = await fetch('/api/services/' + encodeURIComponent(id) + '/pre-check');
+    const j = await r.json();
+    if (j.error) {
+      sect.innerHTML = '<h3>Проверка перед установкой</h3><div class="text-err">' + escapeHtml(j.error) + '</div>';
+      return;
+    }
+    const checks = (j.checks || []).map(c => '<li class="ok">' + escapeHtml(c.replace(/^✓ ?/, '')) + '</li>').join('');
+    const blockers = (j.blockers || []).map(b => '<li class="bad">' + escapeHtml(b) + '</li>').join('');
+    sect.innerHTML = `<h3>Проверка перед установкой</h3>
+      <ul class="req-list">${checks}${blockers}</ul>`;
+    const btn = document.getElementById('install-btn');
+    if (j.ok) {
+      btn.disabled = false;
+      btn.textContent = 'Установить';
+    } else {
+      btn.disabled = true;
+      btn.textContent = 'Установка недоступна';
+    }
+  } catch (e) {
+    sect.innerHTML = '<h3>Проверка перед установкой</h3><div class="text-err">Ошибка: ' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+function installService(id) {
+  // Phase 0: установка не реализована, появится в v1.6.0
+  showToast('Установка появится в v1.6.0 — пока только каталог и pre-check', true);
+}
+
+function closeModal() {
+  document.getElementById('svc-modal').classList.remove('show');
+  _currentService = null;
+}
+
+async function refreshCatalog() {
+  const btn = document.getElementById('btn-refresh');
+  const old = btn.innerHTML;
+  btn.innerHTML = '⏳ Обновляю…';
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/services/refresh', { method: 'POST' });
+    const j = await r.json();
+    if (j.ok) {
+      showToast(j.message || 'Каталог обновлён');
+      await loadCatalog();
+    } else {
+      showToast('Не удалось: ' + (j.message || j.error || 'unknown'), true);
+    }
+  } catch (e) {
+    showToast('Сетевая ошибка: ' + e.message, true);
+  } finally {
+    btn.innerHTML = old;
+    btn.disabled = false;
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  loadCatalog();
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeModal();
+});
+</script>
+</body>
+</html>

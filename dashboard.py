@@ -18,6 +18,7 @@ from flask import Flask, jsonify, send_from_directory, make_response, request, r
 
 import network as network_bp
 import mikrotik as mt
+import services as services_mod
 
 
 # ============ AUTH декораторы и helper'ы ============
@@ -103,7 +104,7 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "1.4.4"
+VERSION = "1.5.0"
 RELEASE_DATE = "2026-06-27"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # Минимальная версия клиента (PWA/cache) с которой backend ещё совместим.
@@ -1419,6 +1420,12 @@ def client_view():
     return send_from_directory(BASE, "index.html")
 
 
+@app.route("/services")
+@requires_auth
+def services_page():
+    return send_from_directory(BASE, "services.html")
+
+
 @app.route("/manifest.json")
 def manifest():
     return send_from_directory(BASE, "manifest.json")
@@ -1858,6 +1865,63 @@ def api_version():
         "min_compatible_client": MIN_COMPATIBLE_CLIENT,
         "schema": network_bp.get_schema_state(),
     })
+
+
+# ============ Services / Магазин (v1.5.0) ============
+
+@app.route("/api/services/counts")
+@requires_auth
+def api_services_counts():
+    """Для счётчика «Сервисы (N/M)» в шапке. Лёгкий, кешируется на фронте."""
+    return jsonify(services_mod.counts())
+
+
+@app.route("/api/services/catalog")
+@requires_auth
+def api_services_catalog():
+    """Весь каталог + флаги совместимости + что установлено.
+    Один-запрос-всё для страницы /services."""
+    catalog = services_mod.load_catalog()
+    installed_map = {s["id"]: s for s in services_mod.list_installed()}
+    items = []
+    for svc in catalog:
+        compatible, reason = services_mod.is_compatible_with_platform(svc)
+        item = dict(svc)
+        item["_compatible"] = compatible
+        item["_incompat_reason"] = None if compatible else reason
+        item["_installed"] = installed_map.get(svc["id"])  # None или dict
+        items.append(item)
+    return jsonify({
+        "ok": True,
+        "platform_arch": services_mod._platform_arch(),
+        "ram_mb": services_mod._system_ram_mb(),
+        "disk_free_gb": services_mod._system_free_disk_gb("/var"),
+        "catalog_status": services_mod.catalog_status(),
+        "services": items,
+    })
+
+
+@app.route("/api/services/installed")
+@requires_auth
+def api_services_installed():
+    """Только установленные — для страницы «Мои сервисы»."""
+    return jsonify({"ok": True, "services": services_mod.list_installed()})
+
+
+@app.route("/api/services/refresh", methods=["POST"])
+@requires_admin
+@audit_action("services_refresh_catalog")
+def api_services_refresh():
+    """git pull каталога. Только админу."""
+    ok, msg = services_mod.refresh_catalog()
+    return jsonify({"ok": ok, "message": msg})
+
+
+@app.route("/api/services/<service_id>/pre-check")
+@requires_auth
+def api_services_pre_check(service_id):
+    """Pre-install чек (RAM/disk/ports/docker)."""
+    return jsonify(services_mod.install_pre_check(service_id))
 
 
 @app.route("/api/changelog")

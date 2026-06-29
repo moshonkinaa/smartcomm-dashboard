@@ -2,6 +2,40 @@
 
 Все значимые изменения проекта. Формат — Keep a Changelog + SemVer.
 
+## 1.5.0 — 2026-06-30
+
+**🛍 Магазин сервисов** — каталог + UI + pre-install чек (Phase 0+1).
+Установка/удаление будут в v1.6.0.
+
+### Added
+- **Каталог сервисов** — отдельный repo [moshonkinaa/smartcomm-services-catalog](https://github.com/moshonkinaa/smartcomm-services-catalog) с 12 YAML манифестами:
+  - **VPN с обходом РКН**: 3X-UI Reality, AmneziaWG
+  - **AI**: Ollama + Open WebUI (локальный ChatGPT)
+  - **Медиа**: Jellyfin (Netflix дома), Immich (Google Photos дома)
+  - **Облако**: Nextcloud AIO (Dropbox + Office дома)
+  - **Безопасность**: AdGuard Home, Vaultwarden
+  - **Умный дом**: Frigate NVR (NVR с AI), Uptime Kuma
+  - **Автоматизация**: n8n (no-code + AI workflows)
+  - **Админ**: Portainer (только инсталлятору)
+- **Backend** `services.py` — загрузка/парсинг YAML, кеш каталога, БД installed_services
+- **API endpoints** (все под auth):
+  - `GET /api/services/counts` — для счётчика в шапке
+  - `GET /api/services/catalog` — весь каталог + флаги совместимости с текущей платформой
+  - `GET /api/services/installed` — что установлено
+  - `GET /api/services/<id>/pre-check` — RAM/disk/ports/docker проверки перед установкой
+  - `POST /api/services/refresh` — git pull каталога (admin only)
+- **UI** — кнопка «🛍 Сервисы» в шапке дашборда с динамическим счётчиком (`N запущено · M установлено · K в магазине`)
+- **Страница `/services`** — карточки каталога, поиск, фильтр по 9 категориям, модалка деталей с pre-check, badge-индикаторы статусов (running/installed/incompat)
+- **Migration v1** — таблица `installed_services` в БД (id, status, installed_at, last_started_at, settings_json, notes, auto_update)
+- **install.sh** обновлён: ставит `python3-yaml` + `git` через apt, клонирует каталог в `/opt/smartcomm-services-catalog/`, копирует новые файлы `services.py` + `services.html`
+- В каталог сервисов фильтруется автоматически по архитектуре (Pi видит только сервисы с `arm64` в platforms; Cubi — `x86_64`), RAM, диску
+
+### Why
+Финальная цель платформы — **магазин сервисов** для тиражирования по клиентам. Контроллер MSI Cubi 5 покупается ради этого. v1.5.0 — фундамент: видеть что доступно, что установлено, что подойдёт твоему железу. v1.6.0 — реальная установка через docker compose. v2.0.0 — пакеты «Базовый/Стандарт/Премиум».
+
+### Совместимость
+Полная backward-compat. Если каталог не склонирован (`/opt/smartcomm-services-catalog/` отсутствует) — backend вернёт `services_count: 0`, кнопка покажет «🛍 Сервисы». UI работает без падений.
+
 ## 1.4.4 — 2026-06-30
 
 `install.sh` теперь применяет платформенные фиксы автоматически по DMI vendor+product.

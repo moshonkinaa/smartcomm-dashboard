@@ -51,9 +51,27 @@ DEFAULT_TYPES = [
 
 # Список миграций. Format: (version, description, callable_taking_cursor)
 # v1+ применяется поверх baseline init_db (где созданы все pre-1.0.0 таблицы).
+def _migrate_v1_installed_services(c):
+    """v1.5.0: таблица installed_services для магазина."""
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS installed_services (
+        id              TEXT PRIMARY KEY,         -- service id из каталога (kebab-case)
+        catalog_version TEXT,                     -- какая версия манифеста стояла на момент install
+        status          TEXT DEFAULT 'installed', -- installed | running | stopped | error | updating | uninstalling
+        installed_at    INTEGER,
+        last_started_at INTEGER,
+        last_action_at  INTEGER,
+        last_error      TEXT,
+        auto_update     TEXT DEFAULT 'never',     -- never | weekly | monthly
+        notes           TEXT,                     -- свободные заметки админа
+        settings_json   TEXT DEFAULT '{}'         -- переопределения env/ports/volumes
+    )
+    """)
+    c.execute("CREATE INDEX IF NOT EXISTS idx_services_status ON installed_services(status)")
+
+
 MIGRATIONS = [
-    # Пример будущей миграции:
-    # (1, "add column foo to bar", lambda c: c.execute("ALTER TABLE bar ADD COLUMN foo TEXT")),
+    (1, "v1.5.0 installed_services table", _migrate_v1_installed_services),
 ]
 
 # Auto-computed: max version из MIGRATIONS или 0 если пуст.
