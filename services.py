@@ -157,19 +157,31 @@ def install_profile(profile_id):
     catalog_ids = {s.get("id") for s in load_catalog()}
     to_install = []
     skipped = []
+    blockers = []   # critical — Docker missing, и т.п. — должны прервать
     for sid in svcs:
         if sid not in catalog_ids:
             skipped.append(f"{sid} (нет в каталоге)")
             continue
-        manifest = next((s for s in load_catalog() if s.get("id") == sid), None)
-        compat_ok, reason = is_compatible_with_platform(manifest)
-        if not compat_ok:
-            skipped.append(f"{sid} ({reason})")
-            continue
         if get_installed(sid):
             skipped.append(f"{sid} (уже установлен)")
             continue
+        # Full pre-check — включая Docker, RAM, диск, порты
+        check = install_pre_check(sid)
+        if check.get("error"):
+            skipped.append(f"{sid} ({check['error']})")
+            continue
+        if not check.get("ok"):
+            blocker_reasons = "; ".join(check.get("blockers", []))
+            # Если корень — отсутствие Docker, это блокер для ВСЕГО профиля
+            if any("Docker не установлен" in b for b in check.get("blockers", [])):
+                blockers.append(f"Docker не установлен — поставь сначала: curl -fsSL https://get.docker.com | sudo sh")
+                break
+            skipped.append(f"{sid} ({blocker_reasons})")
+            continue
         to_install.append(sid)
+
+    if blockers:
+        return False, " · ".join(blockers)
 
     if not to_install:
         return False, "нечего устанавливать: все либо стоят, либо несовместимы. " + "; ".join(skipped)
@@ -191,7 +203,8 @@ def _profile_install_worker(profile, to_install, skipped):
     """Последовательно ставит сервисы профиля. Прогресс пишет под profile_id."""
     pid = profile["id"]
     _progress_set(pid, state="running", phase="preparing",
-                  started_at=time.time(), log=deque(maxlen=500), error=None)
+                  started_at=time.time(), error=None)
+    _progress_reset_log(pid)
     _progress_set(pid, log_line=f"=== Установка пакета «{profile.get('name')}» ===")
     _progress_set(pid, log_line=f"  к установке: {len(to_install)} сервисов")
     if skipped:
@@ -251,7 +264,7 @@ def catalog_status():
     info["services_count"] = len(load_catalog())
     try:
         sha = subprocess.run(
-            ["sudo", "git", "-c", "safe.directory=*",
+            ["sudo", "git", "-c", f"safe.directory={CATALOG_DIR}",
              "-C", str(CATALOG_DIR), "log", "-1", "--format=%h|%s|%ct"],
             capture_output=True, text=True, timeout=5
         )
@@ -275,7 +288,8 @@ def refresh_catalog():
     install.sh, а flask-процесс крутится под service-user. Также передаёт
     `safe.directory=*` через -c чтобы обойти git 2.x dubious ownership check
     БЕЗ модификации /etc/gitconfig (опасно для общей системы)."""
-    git = ["sudo", "git", "-c", "safe.directory=*"]
+    git_safe = f"safe.directory={CATALOG_DIR}"
+    git = ["sudo", "git", "-c", git_safe]
     try:
         if not CATALOG_DIR.exists():
             r = subprocess.run(
@@ -592,16 +606,21 @@ def sync_statuses():
             names = [f"{sid}-{sid}-1"]  # best-effort
         statuses = [_docker_container_status(n) for n in names]
         statuses = [s for s in statuses if s]
-        # Aggregate: если все running → running, иначе если есть exited/dead → error,
-        # иначе stopped
-        if statuses and all(s == "running" for s in statuses):
+        # Aggregate:
+        #   все running → running
+        #   все exited → stopped (нормальный остановленный)
+        #   dead или контейнер исчез → error
+        #   mix → берём худший статус (error > stopped > running)
+        if not statuses:
+            new_status = "error"   # контейнеры исчезли
+        elif any(s == "dead" for s in statuses):
+            new_status = "error"
+        elif all(s == "running" for s in statuses):
             new_status = "running"
-        elif statuses and any(s in ("dead", "exited") for s in statuses):
-            new_status = "stopped"   # exited — это нормальный stop, не error
-        elif not statuses:
-            new_status = "error"     # контейнер исчез
-        else:
+        elif all(s in ("exited", "created", "paused") for s in statuses):
             new_status = "stopped"
+        else:
+            new_status = "stopped"   # mix running+exited — partial stop
         if new_status != inst.get("status"):
             _db_upsert_installed(sid, status=new_status)
 
@@ -763,13 +782,16 @@ def ensure_sampler_started():
 
 
 def _busy_ports():
-    """Список TCP-портов которые слушаются на 0.0.0.0 / 127.0.0.1 / IPv6."""
+    """Список TCP+UDP портов которые слушаются на любом интерфейсе.
+    Раньше проверяли только TCP (-t) — UDP-сервисы (DNS, WireGuard) выпадали."""
     busy = set()
-    try:
-        r = subprocess.run(
-            ["ss", "-tlnH"], capture_output=True, text=True, timeout=5
-        )
-        if r.returncode == 0:
+    for flag in ("-tlnH", "-ulnH"):
+        try:
+            r = subprocess.run(
+                ["ss", flag], capture_output=True, text=True, timeout=5
+            )
+            if r.returncode != 0:
+                continue
             for ln in r.stdout.splitlines():
                 # формат: LISTEN 0 128 0.0.0.0:8080 0.0.0.0:* ...
                 parts = ln.split()
@@ -780,8 +802,8 @@ def _busy_ports():
                         busy.add(int(port_s))
                     except ValueError:
                         continue
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
     return busy
 
 
@@ -795,6 +817,17 @@ def _busy_ports():
 
 _PROGRESS_LOCK = threading.Lock()
 _PROGRESS = {}  # {service_id: {state, phase, started_at, log: deque(maxlen=500), error}}
+_INSTALL_LOCKS = {}      # per-service install/uninstall mutex
+_INSTALL_LOCKS_GUARD = threading.Lock()
+
+
+def _get_install_lock(service_id):
+    """Per-service mutex чтобы install/uninstall одного сервиса не race'ил с собой
+    (например при двойном клике или install+profile-batch одновременно)."""
+    with _INSTALL_LOCKS_GUARD:
+        if service_id not in _INSTALL_LOCKS:
+            _INSTALL_LOCKS[service_id] = threading.Lock()
+        return _INSTALL_LOCKS[service_id]
 
 _PHASES = {
     "queued":      "В очереди",
@@ -829,6 +862,9 @@ def get_progress(service_id):
 
 
 def _progress_set(service_id, **fields):
+    """Безопасное обновление progress'а. log_line добавляет в deque.
+    НЕ принимает 'log' как ключ — для очистки лога используйте
+    _progress_reset_log() (нельзя заменять deque пока другой поток её читает)."""
     with _PROGRESS_LOCK:
         if service_id not in _PROGRESS:
             _PROGRESS[service_id] = {
@@ -838,8 +874,18 @@ def _progress_set(service_id, **fields):
         for k, v in fields.items():
             if k == "log_line" and v:
                 _PROGRESS[service_id]["log"].append(v)
+            elif k == "log":
+                continue   # игнорируем — используйте _progress_reset_log
             else:
                 _PROGRESS[service_id][k] = v
+
+
+def _progress_reset_log(service_id):
+    """Очистить log внутри лока — безопасно для concurrent readers."""
+    with _PROGRESS_LOCK:
+        if service_id in _PROGRESS:
+            _PROGRESS[service_id]["log"].clear()
+            _PROGRESS[service_id]["error"] = None
 
 
 def _service_dir(service_id):
@@ -915,8 +961,11 @@ def _db_delete_installed(service_id):
 
 def _stream_subprocess(cmd, cwd=None, timeout=600):
     """Запускает docker compose с stream output → строки в _PROGRESS log.
-    Возвращает (returncode, last_lines_for_error)."""
-    sid = cwd.name if cwd else "?"  # для prefix
+    Возвращает (returncode, last_lines_for_error).
+
+    Timeout enforced через threading.Timer (раньше: проверяли через time.time()
+    после readline — но readline мог блокировать вечно если stdout не закрылся)."""
+    sid = cwd.name if cwd else "?"
     try:
         proc = subprocess.Popen(
             cmd, cwd=str(cwd) if cwd else None,
@@ -925,24 +974,39 @@ def _stream_subprocess(cmd, cwd=None, timeout=600):
         )
     except FileNotFoundError:
         return 127, f"команда не найдена: {cmd[0]}"
+
+    killed = {"flag": False}
+
+    def _kill_on_timeout():
+        if proc.poll() is None:
+            killed["flag"] = True
+            try:
+                proc.kill()
+            except OSError:
+                pass
+
+    timer = threading.Timer(timeout, _kill_on_timeout)
+    timer.start()
     last_lines = deque(maxlen=20)
-    started = time.time()
-    while True:
-        line = proc.stdout.readline()
-        if not line:
-            if proc.poll() is not None:
-                break
-            time.sleep(0.05)
-            continue
-        line = line.rstrip()
-        if line:
-            _progress_set(sid, log_line=line)
-            last_lines.append(line)
-        if time.time() - started > timeout:
-            proc.kill()
-            _progress_set(sid, log_line=f"[timeout {timeout}s — kill]")
-            return -1, "timeout"
-    rc = proc.wait()
+    try:
+        while True:
+            line = proc.stdout.readline()
+            if not line:
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.05)
+                continue
+            line = line.rstrip()
+            if line:
+                _progress_set(sid, log_line=line)
+                last_lines.append(line)
+        rc = proc.wait()
+    finally:
+        timer.cancel()
+
+    if killed["flag"]:
+        _progress_set(sid, log_line=f"[timeout {timeout}s — process killed]")
+        return -1, "timeout"
     return rc, "\n".join(last_lines)
 
 
@@ -973,8 +1037,20 @@ def install_service(service_id):
 
 def _install_worker(manifest):
     sid = manifest["id"]
-    _progress_set(sid, state="running", phase="preparing", started_at=time.time(),
-                  log=deque(maxlen=500))
+    lock = _get_install_lock(sid)
+    if not lock.acquire(blocking=False):
+        _progress_set(sid, log_line=f"  ⚠ install для {sid} уже идёт — пропускаю")
+        return
+    try:
+        _do_install_worker(manifest)
+    finally:
+        lock.release()
+
+
+def _do_install_worker(manifest):
+    sid = manifest["id"]
+    _progress_set(sid, state="running", phase="preparing", started_at=time.time())
+    _progress_reset_log(sid)
     _progress_set(sid, log_line=f"=== Установка {manifest.get('name', sid)} ===")
     _db_upsert_installed(sid, status="installing",
                          catalog_version=str(manifest.get("schema_version", 1)))
@@ -1051,8 +1127,20 @@ def uninstall_service(service_id, delete_data=False):
 
 
 def _uninstall_worker(sid, delete_data):
+    lock = _get_install_lock(sid)
+    if not lock.acquire(blocking=False):
+        _progress_set(sid, log_line=f"  ⚠ операция для {sid} уже идёт — пропускаю uninstall")
+        return
+    try:
+        _do_uninstall_worker(sid, delete_data)
+    finally:
+        lock.release()
+
+
+def _do_uninstall_worker(sid, delete_data):
     _progress_set(sid, state="running", phase="stopping", started_at=time.time(),
-                  log=deque(maxlen=500), error=None)
+                  error=None)
+    _progress_reset_log(sid)
     _progress_set(sid, log_line=f"=== Удаление {sid} ===")
     _db_upsert_installed(sid, status="uninstalling")
 

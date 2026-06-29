@@ -2,6 +2,50 @@
 
 Все значимые изменения проекта. Формат — Keep a Changelog + SemVer.
 
+## 2.1.0 — 2026-06-30
+
+**Stability release** — углублённый дебаг 4-х параллельных аудиторов нашёл 27 находок, из них критичные пофикшены. Никаких новых фич — только надёжность, безопасность и UI-полировка.
+
+### Fixed — Threading (HIGH)
+- **Race condition на `_IFACE_CACHE`** (dashboard.py) — concurrent requests могли портить timestamp. Добавлен `_IFACE_CACHE_LOCK`
+- **Race condition на `_UPDATES`** (apt-upgrades) — background-thread vs request-thread. Lock + `_updates_snapshot()` helper
+- **Race condition на `_HEALTH`** — health_summary read/write. Добавлен `_HEALTH_LOCK`
+- **Per-service install lock** в services.py — два `install` для одного сервиса (двойной клик / install+profile-batch) больше не race'ят за compose.yml и data dir. `_INSTALL_LOCKS[sid]` non-blocking try-acquire
+- **Безопасная замена `log` deque в `_progress_set`** — раньше worker мог заменить deque пока другой поток её читал из `get_progress()` → crash. Теперь `_progress_set` не принимает `log`, для очистки `_progress_reset_log()` под локом
+- **Timeout в `_stream_subprocess`** — раньше timeout проверялся только после `readline()`, но readline мог блокировать вечно. Теперь через `threading.Timer` который kill'ит процесс независимо от readline-блокировки
+
+### Fixed — Security/Safety
+- **Validation pid в `process_uptime_sec`** — shell injection defence-in-depth. `pid_s.isdigit()` перед `f"ps -p {pid_s}"`
+- **`safe.directory=*` wildcard** в git заменён на explicit `safe.directory={CATALOG_DIR}` — на старых git wildcard игнорировался, безопаснее явно
+- **Pre-check Docker в `install_profile`** — раньше profile installer не проверял что Docker есть → silently fail с «3 fail: docker: command not found». Теперь блокер: останавливает batch и показывает инструкцию для установки
+
+### Fixed — Detection
+- **UDP ports в `_busy_ports`** — раньше ss -t (только TCP). Сервисы с UDP (AdGuard :53, AmneziaWG :51820) → port-check ложно говорил «свободно». Теперь ss -tlnH + ss -ulnH
+- **Status distinction `dead` vs `exited`** — раньше оба → "stopped". Теперь dead → error, exited (нормальный stop) → stopped. Mix → "stopped"
+
+### Fixed — Frontend
+- **Z-index toast** — был 200 vs modal 100, но при открытой модалке toast прятался. Поднят до 1000
+- **`autocomplete="current-password"`** на uninst-pw (раньше "off" — deprecated, не работает с password managers)
+- **Disabled state для action-кнопок** — `serviceAction(id, action, btn)` принимает кнопку и блокирует её на время request (предотвращает double-click → дублирующий restart/stop)
+- **Null-guards для DOM ops после fetch** — если модалка закрыта пока polling/logs шли, не падать. `pollProgress`, `showServiceLogs`
+- **HTTP error checks** — `installService`, `pollProgress`, `serviceAction`, `showServiceLogs` теперь все проверяют `response.ok` перед `.json()` (раньше silent failure на 500)
+- **pollProgress catch** — раньше silent (`catch(_) {}`). Теперь `console.warn` для отладки
+
+### Fixed — UX polish (кнопки одинаковой ширины)
+- В .modal-actions все кнопки теперь равной ширины через `flex: 1 1 110px`. Раньше: Открыть (большая btn-primary) vs Логи (маленькая btn-action) — визуальный мусор. Сейчас единый ряд из равных кнопок
+- Унифицированы цветовые варианты `.btn-action.c-{green,amber,red,blue,mute,purple}` — раньше inline-style для каждого, теперь классы
+- Добавлены `aria-label` для icon-only кнопок (a11y)
+- `.btn-action:disabled` стиль (opacity 0.55)
+
+### Removed
+- Мёртвый код: `_currentService` (был установлен но не читался), `servicesCountsLoad` shim на /services странице
+
+### What's NOT fixed (отложено — не критично или design issues)
+- Credentials в plaintext в DB (mikrotik/iridium/device passwords) — это design decision, требует Fernet/keyring infrastructure
+- Orphan-container discovery (контейнер без compose.yml в `/var/lib/...`) — низкая вероятность, добавим в v2.2
+- Naive YAML placeholder replace `{DATA}` etc — edge case если в комментариях; пока не критично
+- Cross-CSS sync (3 :root блока) — косметика, делать после большого редизайна
+
 ## 2.0.1 — 2026-06-30
 
 UX-фиксы по запросу пользователя.

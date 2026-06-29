@@ -48,9 +48,18 @@
   .btn-action { padding: 7px 13px; font: inherit; font-size: 12.5px; font-weight: 500; color: var(--text); background: var(--bg-inner); border: 1px solid var(--border); border-radius: var(--r-md); cursor: pointer; display: inline-flex; align-items: center; gap: 5px; -webkit-tap-highlight-color: transparent; }
   .btn-action:hover { background: var(--bg-hover); }
   .btn-action svg { width: 13px; height: 13px; }
-  .btn-action.c-mute { color: var(--text-muted); border-color: var(--border); }
+  .btn-action.c-mute   { color: var(--text-muted); border-color: var(--border); }
   .btn-action.c-purple { background: rgba(127,119,221,0.12); border-color: rgba(127,119,221,0.4); color: var(--purple); }
   .btn-action.c-blue   { background: rgba(55,138,221,0.12); border-color: rgba(55,138,221,0.4); color: var(--info); }
+  .btn-action.c-green  { background: rgba(29,158,117,0.12); border-color: rgba(29,158,117,0.4); color: var(--ok); }
+  .btn-action.c-amber  { background: rgba(239,159,39,0.12); border-color: rgba(239,159,39,0.4); color: var(--warn); }
+  .btn-action.c-red    { background: rgba(226,75,74,0.12); border-color: rgba(226,75,74,0.4); color: var(--err); }
+  .btn-action:disabled { opacity: 0.55; cursor: not-allowed; }
+  /* В .modal-actions кнопки равной ширины (flex: 1 1 0) для аккуратного ряда */
+  .modal-actions { gap: 8px; }
+  .modal-actions .btn-action,
+  .modal-actions .btn-close,
+  .modal-actions .btn-primary { flex: 1 1 110px; justify-content: center; text-align: center; min-width: 0; white-space: nowrap; }
 
   /* Stats summary */
   .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 14px; }
@@ -106,6 +115,7 @@
 
   /* Modal */
   .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.55); display: none; z-index: 100; padding: 20px; }
+  /* Toast выше модалок чтобы не прятался под ними */
   .modal-backdrop.show { display: flex; align-items: center; justify-content: center; overflow-y: auto; }
   .modal-box { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 22px; max-width: 620px; width: 100%; max-height: 90vh; overflow-y: auto; }
   .modal-head { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 14px; }
@@ -194,7 +204,7 @@
 </div>
 
 <!-- Toast -->
-<div id="toast" style="position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--bg-card);border:1px solid var(--border);border-radius:9px;padding:10px 18px;font-size:12.5px;display:none;z-index:200;box-shadow:0 4px 12px rgba(0,0,0,0.18)"></div>
+<div id="toast" style="position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--bg-card);border:1px solid var(--border);border-radius:9px;padding:10px 18px;font-size:12.5px;display:none;z-index:1000;box-shadow:0 4px 12px rgba(0,0,0,0.18)"></div>
 
 <script>
 const CATEGORIES = {
@@ -471,41 +481,48 @@ function renderInstalledActions(svc) {
   const isRunning = inst && inst.status === 'running';
   const webUrl = (svc.web_url || '').replace('{CONTROLLER}', location.hostname);
   const parts = [];
+  // Все кнопки одной шириной/стилем — class .btn-action (variants c-*).
   if (webUrl) {
-    parts.push(`<a class="btn-primary" style="text-decoration:none;background:var(--info);border-color:var(--info)" href="${escapeHtml(webUrl)}" target="_blank" rel="noopener">🔗 Открыть</a>`);
+    parts.push(`<a class="btn-action c-blue" style="text-decoration:none" href="${escapeHtml(webUrl)}" target="_blank" rel="noopener" aria-label="Открыть портал сервиса">🔗 Открыть</a>`);
   }
-  parts.push(`<button class="btn-action" onclick="showServiceLogs('${escapeHtml(svc.id)}')">📜 Логи</button>`);
+  parts.push(`<button class="btn-action" onclick="showServiceLogs('${escapeHtml(svc.id)}')" aria-label="Показать логи">📜 Логи</button>`);
   if (isRunning) {
-    parts.push(`<button class="btn-action" onclick="serviceAction('${escapeHtml(svc.id)}','restart')">↻ Перезапустить</button>`);
-    parts.push(`<button class="btn-action" style="color:var(--warn);border-color:rgba(239,159,39,0.4)" onclick="serviceAction('${escapeHtml(svc.id)}','stop')">⏸ Остановить</button>`);
+    parts.push(`<button class="btn-action" onclick="serviceAction('${escapeHtml(svc.id)}','restart',this)" aria-label="Перезапустить сервис">↻ Перезапустить</button>`);
+    parts.push(`<button class="btn-action c-amber" onclick="serviceAction('${escapeHtml(svc.id)}','stop',this)" aria-label="Остановить сервис">⏸ Остановить</button>`);
   } else {
-    parts.push(`<button class="btn-action" style="color:var(--ok);border-color:rgba(29,158,117,0.4)" onclick="serviceAction('${escapeHtml(svc.id)}','start')">▶ Запустить</button>`);
+    parts.push(`<button class="btn-action c-green" onclick="serviceAction('${escapeHtml(svc.id)}','start',this)" aria-label="Запустить сервис">▶ Запустить</button>`);
   }
-  parts.push(`<button class="btn-action" style="background:rgba(226,75,74,0.12);color:var(--err);border-color:rgba(226,75,74,0.4)" onclick="uninstallService('${escapeHtml(svc.id)}', ${JSON.stringify(svc.name)})">🗑 Удалить</button>`);
+  parts.push(`<button class="btn-action c-red" onclick="uninstallService('${escapeHtml(svc.id)}', ${JSON.stringify(svc.name)})" aria-label="Удалить сервис">🗑 Удалить</button>`);
   return parts.join('');
 }
 
-async function serviceAction(id, action) {
+async function serviceAction(id, action, btn) {
   const labels = {start: 'Запускаю', stop: 'Останавливаю', restart: 'Перезапускаю'};
-  showToast((labels[action] || action) + '...');
+  if (btn) btn.disabled = true;
+  showToast((labels[action] || action) + '…');
   try {
     const r = await fetch('/api/services/' + encodeURIComponent(id) + '/action', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({action})
     });
+    if (!r.ok) {
+      showToast('HTTP ' + r.status, true);
+      if (btn) btn.disabled = false;
+      return;
+    }
     const j = await r.json();
     if (!j.ok) {
       showToast('Ошибка ' + action + ': ' + (j.output || j.error || '?'), true);
+      if (btn) btn.disabled = false;
       return;
     }
     showToast({start: 'Запущен', stop: 'Остановлен', restart: 'Перезапущен'}[action]);
-    // Refresh каталог чтобы статус-badge обновился
     await loadCatalog();
-    // Reopen modal с актуальным state
     setTimeout(() => openServiceModal(id), 200);
   } catch (e) {
     showToast('Сетевая ошибка: ' + e.message, true);
+    if (btn) btn.disabled = false;
   }
 }
 
@@ -549,34 +566,39 @@ async function showServiceLogs(id) {
   document.getElementById('svc-modal').classList.add('show');
   try {
     const r = await fetch('/api/services/' + encodeURIComponent(id) + '/logs');
-    const j = await r.json();
     const pre = document.getElementById('svc-logs');
+    if (!pre) return;  // модалка уже закрыта пока fetch шёл
+    if (!r.ok) { pre.textContent = 'HTTP ' + r.status; return; }
+    const j = await r.json();
     pre.textContent = j.ok ? (j.logs || '(пусто)') : 'Ошибка: ' + (j.error || '?');
     pre.scrollTop = pre.scrollHeight;
   } catch (e) {
-    document.getElementById('svc-logs').textContent = 'Сетевая ошибка: ' + e.message;
+    const pre = document.getElementById('svc-logs');
+    if (pre) pre.textContent = 'Сетевая ошибка: ' + e.message;
   }
 }
 
 async function installService(id) {
   const btn = document.getElementById('install-btn');
-  btn.disabled = true;
-  btn.textContent = 'Запускаю...';
+  if (btn) { btn.disabled = true; btn.textContent = 'Запускаю…'; }
+  const restoreBtn = () => {
+    const b = document.getElementById('install-btn');
+    if (b) { b.disabled = false; b.textContent = 'Установить'; }
+  };
   try {
     const r = await fetch('/api/services/' + encodeURIComponent(id) + '/install', { method: 'POST' });
+    if (!r.ok) { showToast('HTTP ' + r.status, true); restoreBtn(); return; }
     const j = await r.json();
     if (!j.ok) {
       showToast('Не удалось запустить: ' + (j.message || j.error || 'unknown'), true);
-      btn.disabled = false;
-      btn.textContent = 'Установить';
+      restoreBtn();
       return;
     }
     showToast('Установка запущена в фоне');
     showProgressUI(id, 'install');
   } catch (e) {
     showToast('Сетевая ошибка: ' + e.message, true);
-    btn.disabled = false;
-    btn.textContent = 'Установить';
+    restoreBtn();
   }
 }
 
@@ -593,7 +615,7 @@ async function uninstallService(id, svcName) {
     </div>
     <div class="modal-section">
       <label style="display:block;margin-bottom:6px;font-size:12.5px;color:var(--text-muted)">Введи свой пароль admin для подтверждения:</label>
-      <input type="password" id="uninst-pw" class="search" style="width:100%" autocomplete="off" placeholder="Пароль...">
+      <input type="password" id="uninst-pw" class="search" style="width:100%" autocomplete="current-password" placeholder="Пароль...">
     </div>
     <div class="modal-section" style="background:rgba(226,75,74,0.05);padding:10px 12px;border-radius:9px;border:1px solid rgba(226,75,74,0.2)">
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12.5px;color:var(--err)">
@@ -664,15 +686,24 @@ function showProgressUI(id, action) {
 async function pollProgress(id, action) {
   try {
     const r = await fetch('/api/services/' + encodeURIComponent(id) + '/install-progress');
+    if (!r.ok) { console.warn('pollProgress HTTP', r.status); return; }
     const j = await r.json();
     if (!j.ok) return;
-    document.getElementById('prog-phase').textContent =
+    // Защита: модалка могла закрыться пока polling шёл
+    const phaseEl = document.getElementById('prog-phase');
+    if (!phaseEl) {
+      if (_progressTimer) { clearInterval(_progressTimer); _progressTimer = null; }
+      return;
+    }
+    phaseEl.textContent =
       (j.phase === 'error' ? '❌ ' : (j.state === 'done' ? '✓ ' : '⏳ ')) +
       (j.phase_label || j.phase);
-    document.getElementById('prog-elapsed').textContent = j.elapsed_sec + 'с';
-    document.getElementById('prog-state').textContent = j.state;
+    const elapsedEl = document.getElementById('prog-elapsed');
+    const stateEl = document.getElementById('prog-state');
+    if (elapsedEl) elapsedEl.textContent = j.elapsed_sec + 'с';
+    if (stateEl) stateEl.textContent = j.state;
     const logEl = document.getElementById('prog-log');
-    if (j.log && j.log.length) {
+    if (logEl && j.log && j.log.length) {
       const wasAtBottom = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 20;
       logEl.textContent = j.log.join('\n');
       if (wasAtBottom) logEl.scrollTop = logEl.scrollHeight;
@@ -680,7 +711,8 @@ async function pollProgress(id, action) {
     if (j.state === 'done') {
       clearInterval(_progressTimer);
       _progressTimer = null;
-      document.getElementById('prog-close').disabled = false;
+      const closeBtn = document.getElementById('prog-close');
+      if (closeBtn) closeBtn.disabled = false;
       if (j.phase === 'error') {
         showToast('Ошибка: ' + (j.error || '?'), true);
       } else {
@@ -701,7 +733,7 @@ async function pollProgress(id, action) {
         }
       }
     }
-  } catch (_) { /* пропускаем */ }
+  } catch (e) { console.warn('pollProgress error:', e); }
 }
 
 function stopProgressUI() {

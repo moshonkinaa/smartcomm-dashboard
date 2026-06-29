@@ -104,7 +104,7 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "2.0.1"
+VERSION = "2.1.0"
 RELEASE_DATE = "2026-06-27"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # Минимальная версия клиента (PWA/cache) с которой backend ещё совместим.
@@ -509,6 +509,7 @@ def _primary_iface():
 
 
 _IFACE_CACHE = {"iface": None, "ts": 0}
+_IFACE_CACHE_LOCK = threading.Lock()
 
 
 def primary_iface():
@@ -516,12 +517,14 @@ def primary_iface():
     если default route ещё не настроен (ранний boot), повторяем каждый вызов
     пока не найдём, чтобы избежать застревания на fallback'е."""
     now = time.time()
-    if _IFACE_CACHE["iface"] and now - _IFACE_CACHE["ts"] < 60:
-        return _IFACE_CACHE["iface"]
+    with _IFACE_CACHE_LOCK:
+        if _IFACE_CACHE["iface"] and now - _IFACE_CACHE["ts"] < 60:
+            return _IFACE_CACHE["iface"]
     found = _primary_iface()
     if found:
-        _IFACE_CACHE["iface"] = found
-        _IFACE_CACHE["ts"] = now
+        with _IFACE_CACHE_LOCK:
+            _IFACE_CACHE["iface"] = found
+            _IFACE_CACHE["ts"] = now
         return found
     # Fallback: первый UP не-loopback интерфейс
     try:
@@ -565,10 +568,14 @@ def net_rate(iface=None):
 
 def process_uptime_sec(pid):
     """Real process uptime via ps -o etimes (more accurate than systemd
-    ActiveEnterTimestamp when service has watchdog/auto-restart)."""
+    ActiveEnterTimestamp when service has watchdog/auto-restart).
+    Validate pid — defence-in-depth для shell injection."""
     if not pid or pid == "0":
         return None
-    out = sh(f"ps -o etimes= -p {pid} 2>/dev/null").strip()
+    pid_s = str(pid).strip()
+    if not pid_s.isdigit():
+        return None
+    out = sh(f"ps -o etimes= -p {pid_s} 2>/dev/null").strip()
     try:
         return int(out)
     except (ValueError, TypeError):
@@ -1318,6 +1325,7 @@ def sdcard_health():
 
 
 _UPDATES = {"ts": 0, "count": None, "ok": False}
+_UPDATES_LOCK = threading.Lock()
 
 
 def _updates_refresher():
@@ -1325,11 +1333,13 @@ def _updates_refresher():
         try:
             out = sh("apt list --upgradable 2>/dev/null", timeout=120)
             count = len([l for l in out.splitlines() if "/" in l and "upgradable" in l])
-            _UPDATES["count"] = count
-            _UPDATES["ts"] = int(time.time())
-            _UPDATES["ok"] = True
+            with _UPDATES_LOCK:
+                _UPDATES["count"] = count
+                _UPDATES["ts"] = int(time.time())
+                _UPDATES["ok"] = True
         except Exception:
-            _UPDATES["ok"] = False
+            with _UPDATES_LOCK:
+                _UPDATES["ok"] = False
         time.sleep(6 * 3600)
 
 
@@ -1337,28 +1347,37 @@ threading.Thread(target=_updates_refresher, daemon=True).start()
 
 
 _HEALTH = {"ts": 0, "data": None}
+_HEALTH_LOCK = threading.Lock()
 
 
 def health_summary():
     now = time.time()
-    if _HEALTH["data"] and (now - _HEALTH["ts"]) < 30:
-        return _HEALTH["data"]
+    with _HEALTH_LOCK:
+        if _HEALTH["data"] and (now - _HEALTH["ts"]) < 30:
+            return _HEALTH["data"]
     data = {
         "ntp_synced": ntp_status(),
         "failed_units": failed_units_list(),
         "reboot": reboot_required_info(),
-        "updates": {
-            "count": _UPDATES["count"],
-            "ts": _UPDATES["ts"],
-            "fresh": _UPDATES["ok"],
-        },
+        "updates": _updates_snapshot(),
         "dmesg_errors": dmesg_errors(5),
         "dmesg_firmware_noise": dmesg_firmware_noise_count(),
         "sdcard": sdcard_health(),
     }
-    _HEALTH["ts"] = now
-    _HEALTH["data"] = data
+    with _HEALTH_LOCK:
+        _HEALTH["ts"] = now
+        _HEALTH["data"] = data
     return data
+
+
+def _updates_snapshot():
+    """Атомарный снимок _UPDATES под локом."""
+    with _UPDATES_LOCK:
+        return {
+            "count": _UPDATES["count"],
+            "ts": _UPDATES["ts"],
+            "fresh": _UPDATES["ok"],
+        }
 
 
 def _push_sample(buf, ts, t, c, m_pct, d_pct, net_kbps):
