@@ -104,7 +104,7 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "2.3.0"
+VERSION = "2.3.1"
 RELEASE_DATE = "2026-06-30"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # Минимальная версия клиента (PWA/cache) с которой backend ещё совместим.
@@ -1776,7 +1776,7 @@ def act_restart_argononed():
 @audit_action("action_reboot_pi", target_from_path=True)
 def act_reboot():
     subprocess.Popen("sleep 2 && sudo reboot", shell=True)
-    return jsonify({"ok": True, "message": "Pi перезагрузится через 2 сек"})
+    return jsonify({"ok": True, "message": "Контроллер перезагрузится через 2 сек"})
 
 
 @app.route("/api/action/shutdown", methods=["POST"])
@@ -1784,7 +1784,7 @@ def act_reboot():
 @audit_action("action_shutdown_pi", target_from_path=True)
 def act_shutdown():
     subprocess.Popen("sleep 2 && sudo shutdown -h now", shell=True)
-    return jsonify({"ok": True, "message": "Pi выключится через 2 сек"})
+    return jsonify({"ok": True, "message": "Контроллер выключится через 2 сек"})
 
 
 # ============ AUTH endpoints ============
