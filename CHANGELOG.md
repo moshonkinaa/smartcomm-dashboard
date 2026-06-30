@@ -2,6 +2,35 @@
 
 Все значимые изменения проекта. Формат — Keep a Changelog + SemVer.
 
+## 2.2.0 — 2026-06-30
+
+**Auto-update сервисов магазина** — закрытие оставшейся фичи v2.0.0 (тогда было только UI-настройка never/weekly/monthly без реальной логики).
+
+### Added — Backend
+- **`update_service(id, source='manual')`** в services.py — `docker compose pull` + `up -d` в фоновом потоке. Использует существующий per-service install lock — не race'ит с install/uninstall.
+- **`_auto_update_loop()`** — background thread (стартовая задержка 5 мин, потом цикл раз в час). Проверяет installed services с `auto_update=weekly/monthly`, для due-сервисов вызывает `update_service(sid, source='auto')`. Между сервисами 30с задержка (Docker Hub throttling).
+- **`_should_auto_update(inst)`** — bool helper: `(now - last_auto_update_at) >= interval` (7d / 30d). Пропускает сервисы в error/installing/updating.
+- **Migration v2** — две новые колонки в `installed_services`:
+  - `last_auto_update_at` INTEGER — Unix timestamp последнего auto-update
+  - `last_auto_update_ok` INTEGER (1/0) — успешно ли прошло
+- Запуск `ensure_auto_updater_started()` в dashboard init
+
+### Added — API
+- **`POST /api/services/<id>/update`** — manual «Обновить сейчас». Admin + audit. Прогресс через тот же `/install-progress` endpoint что и install.
+
+### Added — UI
+- **Кнопка «⬆ Обновить»** в модалке installed-сервиса (между «Запустить/Остановить» и «Удалить»). Confirm dialog «Контейнер будет пересоздан, сервис недоступен 10-60 сек».
+- В секции «Настройки» под select'ом auto_update показывается **«Последнее обновление: DATE TIME»** если поле заполнено, или «Образ ни разу не обновлялся (стоит первоначальная версия)»
+- Если `last_auto_update_ok=0` — красный ⚠ маркер
+
+### Why
+В v2.0.0 был UI-select auto_update (never/weekly/monthly) — но без реальной фоновой логики. Сейчас закрыто: настройка работает, образы реально пуллятся по расписанию, в UI видно когда последний раз обновлялся.
+
+### Совместимость
+- Migration v2 — `ALTER TABLE ADD COLUMN` с try/except (idempotent на старых БД)
+- Существующим инсталляциям auto_update остаётся `never` (default) — никаких неожиданных обновлений
+- Сервисы со status `error`/`updating`/`installing`/`uninstalling` auto-updater пропускает (defensive)
+
 ## 2.1.1 — 2026-06-30
 
 `install.sh` теперь ставит `sqlite3` CLI — пригодится админу для ручных DB-операций (debugging, cleanup).

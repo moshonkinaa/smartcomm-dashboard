@@ -426,12 +426,18 @@ async function openServiceModal(id) {
       <h3>Настройки</h3>
       <label style="display:block;margin-bottom:4px;font-size:12px;color:var(--text-muted)">📝 Заметки (для админа — клиент, оплата, контакты)</label>
       <textarea id="svc-notes" class="search" style="width:100%;min-height:60px;font-family:inherit;resize:vertical;margin-bottom:10px" placeholder="Например: «Установлено для клиента ИП Иванов, оплачено до 15.11.2026»">${escapeHtml(svc._installed.notes || '')}</textarea>
-      <label style="display:block;margin-bottom:4px;font-size:12px;color:var(--text-muted)">🔄 Автообновление образов</label>
+      <label style="display:block;margin-bottom:4px;font-size:12px;color:var(--text-muted)">🔄 Автообновление образов (docker pull новой версии)</label>
       <select id="svc-auto-update" class="search" style="width:100%">
-        <option value="never" ${(svc._installed.auto_update || 'never') === 'never' ? 'selected' : ''}>Никогда (вручную)</option>
+        <option value="never" ${(svc._installed.auto_update || 'never') === 'never' ? 'selected' : ''}>Никогда (только вручную)</option>
         <option value="weekly" ${svc._installed.auto_update === 'weekly' ? 'selected' : ''}>Раз в неделю</option>
         <option value="monthly" ${svc._installed.auto_update === 'monthly' ? 'selected' : ''}>Раз в месяц</option>
       </select>
+      ${svc._installed.last_auto_update_at ? `
+        <p class="fs-sm text-muted mt-2" style="margin-bottom:0">
+          Последнее обновление: ${new Date(svc._installed.last_auto_update_at * 1000).toLocaleString('ru-RU')}
+          ${svc._installed.last_auto_update_ok === 0 ? '<span class="text-err">⚠ с ошибкой</span>' : ''}
+        </p>
+      ` : '<p class="fs-sm text-dim mt-2" style="margin-bottom:0">Образ ни разу не обновлялся (стоит первоначальная версия)</p>'}
       <button class="btn-action" style="margin-top:8px" onclick="saveServiceSettings('${escapeHtml(svc.id)}')">💾 Сохранить настройки</button>
     </div>` : ''}
     ${svc.post_install ? `
@@ -492,8 +498,23 @@ function renderInstalledActions(svc) {
   } else {
     parts.push(`<button class="btn-action c-green" onclick="serviceAction('${escapeHtml(svc.id)}','start',this)" aria-label="Запустить сервис">▶ Запустить</button>`);
   }
+  parts.push(`<button class="btn-action c-blue" onclick="updateService('${escapeHtml(svc.id)}')" aria-label="Обновить образ сервиса">⬆ Обновить</button>`);
   parts.push(`<button class="btn-action c-red" onclick="uninstallService('${escapeHtml(svc.id)}', ${JSON.stringify(svc.name)})" aria-label="Удалить сервис">🗑 Удалить</button>`);
   return parts.join('');
+}
+
+async function updateService(id) {
+  if (!confirm('Обновить образ сервиса до latest? Контейнер будет пересоздан, сервис недоступен 10-60 сек.')) return;
+  try {
+    const r = await fetch('/api/services/' + encodeURIComponent(id) + '/update', { method: 'POST' });
+    if (!r.ok) { showToast('HTTP ' + r.status, true); return; }
+    const j = await r.json();
+    if (!j.ok) { showToast('Не удалось: ' + (j.message || j.error), true); return; }
+    showToast('Обновление запущено');
+    showProgressUI(id, 'install');   // используем тот же progress UI
+  } catch (e) {
+    showToast('Сетевая ошибка: ' + e.message, true);
+  }
 }
 
 async function serviceAction(id, action, btn) {

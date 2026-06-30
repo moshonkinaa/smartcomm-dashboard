@@ -104,7 +104,7 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "2.1.1"
+VERSION = "2.2.0"
 RELEASE_DATE = "2026-06-27"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # Минимальная версия клиента (PWA/cache) с которой backend ещё совместим.
@@ -2005,6 +2005,15 @@ def api_services_logs(service_id):
     return jsonify({"ok": ok, "logs": msg if ok else "", "error": msg if not ok else None})
 
 
+@app.route("/api/services/<service_id>/update", methods=["POST"])
+@requires_admin
+@audit_action("service_update", target_from_path=True)
+def api_services_update(service_id):
+    """Manual «Обновить» — docker compose pull + up -d. Прогресс через install-progress."""
+    ok, msg = services_mod.update_service(service_id, source="manual")
+    return jsonify({"ok": ok, "message": msg, "service_id": service_id}), (200 if ok else 400)
+
+
 @app.route("/api/services/<service_id>/settings", methods=["PATCH"])
 @requires_admin
 @audit_action("service_settings_update", target_from_path=True)
@@ -2356,11 +2365,13 @@ threading.Thread(target=_auth_cleanup_loop, daemon=True).start()
 threading.Thread(target=_update_check_loop, daemon=True).start()
 
 # Services: discover existing installations (compensate v1.6.0 БД bug) + start sampler
+# + auto-updater (v2.2.0)
 try:
     found = services_mod.discover_existing()
     if found:
         print(f"[services] discovered {found} previously-installed services")
     services_mod.ensure_sampler_started()
+    services_mod.ensure_auto_updater_started()
 except Exception as e:
     print(f"[services] init warn: {e}")
 

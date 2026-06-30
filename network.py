@@ -70,8 +70,22 @@ def _migrate_v1_installed_services(c):
     c.execute("CREATE INDEX IF NOT EXISTS idx_services_status ON installed_services(status)")
 
 
+def _migrate_v2_auto_update_columns(c):
+    """v2.2.0: колонки для auto-update tracking."""
+    # SQLite ALTER TABLE — добавляем по одной, ignore-if-exists через try/except
+    for col_sql in (
+        "ALTER TABLE installed_services ADD COLUMN last_auto_update_at INTEGER",
+        "ALTER TABLE installed_services ADD COLUMN last_auto_update_ok INTEGER DEFAULT 1",
+    ):
+        try:
+            c.execute(col_sql)
+        except sqlite3.OperationalError:
+            pass   # column уже есть
+
+
 MIGRATIONS = [
     (1, "v1.5.0 installed_services table", _migrate_v1_installed_services),
+    (2, "v2.2.0 auto-update tracking columns", _migrate_v2_auto_update_columns),
 ]
 
 # Auto-computed: max version из MIGRATIONS или 0 если пуст.

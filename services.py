@@ -508,6 +508,144 @@ def install_pre_check(service_id):
 
 # ============ Service lifecycle (start/stop/restart) ============
 
+# ============ Auto-update (v2.2.0) ============
+#
+# Каждый installed-сервис имеет setting `auto_update` (never/weekly/monthly).
+# Background loop раз в час проверяет: пора ли обновить?
+# Обновление = docker compose pull (тянет latest image-tag из манифеста) +
+# docker compose up -d (recreate если image другой).
+# Использует per-service install lock — не race'ит с install/uninstall.
+
+_AUTO_UPDATE_INTERVALS = {
+    "weekly":  7 * 86400,
+    "monthly": 30 * 86400,
+}
+
+
+def _should_auto_update(inst):
+    """True если сервис due для auto-update."""
+    mode = inst.get("auto_update", "never")
+    if mode not in _AUTO_UPDATE_INTERVALS:
+        return False
+    if inst.get("status") not in ("running", "installed", "stopped"):
+        return False   # не трогаем сервисы в error/installing/updating/uninstalling
+    last = inst.get("last_auto_update_at") or inst.get("installed_at") or 0
+    return (time.time() - last) >= _AUTO_UPDATE_INTERVALS[mode]
+
+
+def update_service(service_id, source="manual"):
+    """docker compose pull + up -d для одного сервиса. source = manual | auto.
+    Возвращает (ok, message). Запускается в фоновом потоке — отдаёт сразу."""
+    inst = get_installed(service_id)
+    if not inst:
+        return False, "сервис не установлен"
+    sdir = _service_dir(service_id)
+    if not (sdir / "compose.yml").exists():
+        return False, "compose.yml не найден"
+    t = threading.Thread(
+        target=_update_worker, args=(service_id, source), daemon=True,
+        name=f"update-{service_id}"
+    )
+    t.start()
+    return True, f"обновление запущено ({source})"
+
+
+def _update_worker(sid, source):
+    lock = _get_install_lock(sid)
+    if not lock.acquire(blocking=False):
+        _progress_set(sid, log_line=f"  ⚠ {sid}: другая операция уже идёт — skip update")
+        return
+    try:
+        _do_update_worker(sid, source)
+    finally:
+        lock.release()
+
+
+def _do_update_worker(sid, source):
+    sdir = _service_dir(sid)
+    compose_path = sdir / "compose.yml"
+    _progress_set(sid, state="running", phase="pulling", started_at=time.time(),
+                  error=None)
+    _progress_reset_log(sid)
+    _progress_set(sid, log_line=f"=== Обновление {sid} ({source}) ===")
+    _db_upsert_installed(sid, status="updating")
+    try:
+        # 1. pull (тянет latest tag из compose.yml)
+        _progress_set(sid, log_line="--- docker compose pull ---")
+        rc, last = _stream_subprocess(
+            ["sudo", "docker", "compose", "-f", str(compose_path), "pull"],
+            cwd=sdir, timeout=900
+        )
+        if rc != 0:
+            raise RuntimeError(f"pull rc={rc}: {last[-200:]}")
+        # 2. up -d (recreate если image другой)
+        _progress_set(sid, phase="starting", log_line="--- docker compose up -d ---")
+        rc, last = _stream_subprocess(
+            ["sudo", "docker", "compose", "-f", str(compose_path), "up", "-d"],
+            cwd=sdir, timeout=180
+        )
+        if rc != 0:
+            raise RuntimeError(f"up rc={rc}: {last[-200:]}")
+        _progress_set(sid, state="done", phase="running",
+                      log_line=f"=== ✓ Обновлён ({source}) ===")
+        _db_upsert_installed(
+            sid, status="running",
+            last_started_at=int(time.time()),
+            last_auto_update_at=int(time.time()),
+            last_auto_update_ok=1,
+            last_error=None,
+        )
+    except Exception as e:
+        err = f"{type(e).__name__}: {e}"
+        _progress_set(sid, state="done", phase="error", error=err,
+                      log_line=f"!!! FAIL: {err}")
+        _db_upsert_installed(
+            sid, status="error", last_error=err[:500],
+            last_auto_update_at=int(time.time()), last_auto_update_ok=0,
+        )
+
+
+def _auto_update_loop():
+    """Background loop: раз в час просыпается, выбирает due сервисы, обновляет
+    последовательно (через update_service который сам берёт per-service lock)."""
+    # Стартовая задержка 5 мин — чтобы дать дашборду полностью подняться
+    time.sleep(300)
+    while True:
+        try:
+            installed = list_installed()
+            due = [s for s in installed if _should_auto_update(s)]
+            if due:
+                print(f"[auto-update] {len(due)} сервисов due: " +
+                      ", ".join(s["id"] for s in due))
+                for s in due:
+                    sid = s["id"]
+                    try:
+                        ok, msg = update_service(sid, source="auto")
+                        if not ok:
+                            print(f"[auto-update] {sid}: {msg}")
+                        # Ждём 30с между сервисами — чтобы Docker Hub не throttled
+                        time.sleep(30)
+                    except Exception as e:
+                        print(f"[auto-update] {sid} crash: {e}")
+        except Exception as e:
+            print(f"[auto-update] loop error: {e}")
+        # Проверяем раз в час
+        time.sleep(3600)
+
+
+_AUTO_UPDATER_STARTED = False
+
+
+def ensure_auto_updater_started():
+    """Запускает background auto-update loop один раз."""
+    global _AUTO_UPDATER_STARTED
+    if _AUTO_UPDATER_STARTED:
+        return
+    _AUTO_UPDATER_STARTED = True
+    threading.Thread(target=_auto_update_loop, daemon=True,
+                     name="services-auto-updater").start()
+
+
 def service_action(service_id, action):
     """action: start | stop | restart | logs. Возвращает (ok, message_or_output)."""
     if action not in ("start", "stop", "restart", "logs"):
