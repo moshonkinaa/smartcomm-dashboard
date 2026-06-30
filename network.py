@@ -659,15 +659,51 @@ def auth_log(username, ip, action, target=None, details=None, result="success"):
         pass
 
 
-def auth_get_audit(limit=200, offset=0, since_ts=None, username=None):
+def _audit_request_meta():
+    """Возвращает (username, ip) текущего HTTP-запроса. None при отсутствии сессии.
+    Безопасно вне Flask context (вернёт (None, None))."""
+    try:
+        sid = request.cookies.get("sc_session")
+        sess = auth_get_session(sid) if sid else None
+        username = sess.get("username") if sess else None
+        xff = request.headers.get("X-Forwarded-For", "")
+        ip = xff.split(",")[0].strip() if xff else (request.remote_addr or "?")
+        return username, ip
+    except Exception:
+        return None, None
+
+
+def _audit(action, target=None, details=None, ok=True):
+    """Helper для endpoints в network.py — пишет в auth_audit от имени текущего
+    юзера. Никогда не падает (best-effort), даже если БД недоступна.
+
+    Передавай в details только non-secret поля: имена, ID, IP, MAC.
+    НИКОГДА не пиши пароли — даже маскированные. Если нужно — поле = '***'."""
+    username, ip = _audit_request_meta()
+    auth_log(username, ip, action, target=target, details=details,
+             result="success" if ok else "fail")
+
+
+def auth_get_audit(limit=200, offset=0, since_ts=None, username=None,
+                   action=None, to_ts=None, result=None):
     sql = "SELECT id, ts, username, ip, action, target, details, result FROM auth_audit WHERE 1=1"
     params = []
     if since_ts is not None:
         sql += " AND ts >= ?"
         params.append(since_ts)
+    if to_ts is not None:
+        sql += " AND ts <= ?"
+        params.append(to_ts)
     if username:
         sql += " AND username = ?"
         params.append(username)
+    if action:
+        # LIKE для частичного совпадения (например "credential" найдёт create/update/delete)
+        sql += " AND action LIKE ?"
+        params.append(f"%{action}%")
+    if result:
+        sql += " AND result = ?"
+        params.append(result)
     sql += " ORDER BY ts DESC LIMIT ? OFFSET ?"
     params.extend([limit, offset])
     with db() as c:
@@ -1091,8 +1127,13 @@ def create_device():
                   vals["description"], vals["login"], vals["password"],
                   vals["url"], vals["notes"], tags, open_ports,
                   now, now, now))
+        _audit("network_device_create", target=str(cur.lastrowid),
+               details={"mac": vals.get("mac"), "ip": vals.get("ip"),
+                        "name": vals.get("name"), "type": vals.get("device_type")})
         return jsonify({"ok": True, "id": cur.lastrowid})
     except sqlite3.IntegrityError as e:
+        _audit("network_device_create", details={"mac": vals.get("mac"),
+               "error": str(e)[:100]}, ok=False)
         return jsonify({"ok": False, "error": str(e)}), 409
 
 
@@ -1127,14 +1168,22 @@ def update_device(did):
     with db() as c:
         c.execute(f"UPDATE devices SET {', '.join(sets)} WHERE id = ?", vals)
     audit_log(did, "update", audited)
+    # audited уже маскирует password='***' выше; передаём только список изменённых полей
+    _audit("network_device_update", target=str(did),
+           details={"fields": list(audited.keys())})
     return jsonify({"ok": True})
 
 
 @bp.route("/api/network/devices/<int:did>", methods=["DELETE"])
 def delete_device(did):
+    # Сначала читаем — нужно для аудита (что именно удалили)
     with db() as c:
+        row = c.execute("SELECT mac, ip, name FROM devices WHERE id = ?",
+                        (did,)).fetchone()
         c.execute("DELETE FROM devices WHERE id = ?", (did,))
     audit_log(did, "delete", None)
+    _audit("network_device_delete", target=str(did),
+           details=(dict(row) if row else {"note": "device not found"}))
     return jsonify({"ok": True})
 
 
@@ -1163,6 +1212,8 @@ def bulk_update():
         )
     audit_log(None, "bulk_update",
               {"ids": ids, "fields": fields, "count": len(ids)})
+    _audit("network_device_bulk_update",
+           details={"count": len(ids), "fields": list(fields.keys())})
     return jsonify({"ok": True, "count": len(ids)})
 
 
@@ -1251,6 +1302,7 @@ def fingerprint_device(did):
 @bp.route("/api/network/reclassify", methods=["POST"])
 def reclassify():
     count = backfill_classification()
+    _audit("network_reclassify", details={"updated": count})
     return jsonify({"ok": True, "updated": count})
 
 
@@ -1307,6 +1359,10 @@ def add_credential(did):
             VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (did, d.get("label"), d.get("username"), d.get("password"),
               d.get("notes"), now, now))
+    # SECURITY: НИКОГДА не пишем password в audit — даже короткий хеш. Только метаданные.
+    _audit("credential_create", target=str(cur.lastrowid),
+           details={"device_id": did, "label": d.get("label"),
+                    "username": d.get("username")})
     return jsonify({"ok": True, "id": cur.lastrowid})
 
 
@@ -1315,10 +1371,12 @@ def update_credential(cid):
     d = request.get_json(force=True) or {}
     fields = ("label", "username", "password", "notes")
     sets, vals = [], []
+    changed_fields = []
     for f in fields:
         if f in d:
             sets.append(f"{f} = ?")
             vals.append(d[f])
+            changed_fields.append(f)
     if not sets:
         return jsonify({"ok": False, "error": "no fields"}), 400
     sets.append("updated_at = ?")
@@ -1326,13 +1384,25 @@ def update_credential(cid):
     vals.append(cid)
     with db() as c:
         c.execute(f"UPDATE device_credentials SET {', '.join(sets)} WHERE id = ?", vals)
+    # SECURITY: пишем ТОЛЬКО список изменённых полей (без значений) — пароль не светим
+    _audit("credential_update", target=str(cid),
+           details={"fields": changed_fields,
+                    "password_changed": ("password" in changed_fields)})
     return jsonify({"ok": True})
 
 
 @bp.route("/api/network/credentials/<int:cid>", methods=["DELETE"])
 def delete_credential(cid):
+    # SECURITY: читаем метаданные ДО удаления — нужно знать что именно стёрли
+    # (без пароля — только label, username, device_id)
     with db() as c:
+        row = c.execute(
+            "SELECT device_id, label, username FROM device_credentials WHERE id = ?",
+            (cid,)
+        ).fetchone()
         c.execute("DELETE FROM device_credentials WHERE id = ?", (cid,))
+    _audit("credential_delete", target=str(cid),
+           details=(dict(row) if row else {"note": "credential not found"}))
     return jsonify({"ok": True})
 
 
@@ -1384,6 +1454,8 @@ def upload_device_photo(did):
         )
         photo_id = cur.lastrowid
     audit_log(did, "photo", {"added": fname, "size": size})
+    _audit("device_photo_upload", target=str(did),
+           details={"filename": fname, "size_bytes": size, "photo_id": photo_id})
     return jsonify({"ok": True, "id": photo_id, "filename": fname,
                     "size": size, "uploaded_at": now})
 
@@ -1419,6 +1491,8 @@ def delete_photo_file(pid):
         try: p.unlink()
         except Exception: pass
     audit_log(did, "photo", {"deleted": fname})
+    _audit("device_photo_delete", target=str(pid),
+           details={"filename": fname, "device_id": did})
     return jsonify({"ok": True})
 
 
@@ -1492,6 +1566,8 @@ def bulk_tags():
             c.execute("UPDATE devices SET tags = ?, updated_at = ? WHERE id = ?",
                       (json.dumps(result), now, did))
     audit_log(None, "bulk_tags", {"op": op, "ids": ids, "tags": new_tags})
+    _audit("network_bulk_tags",
+           details={"op": op, "count": len(ids), "tags": new_tags})
     return jsonify({"ok": True, "count": len(ids)})
 
 
@@ -1609,14 +1685,18 @@ def get_settings():
 @bp.route("/api/network/settings", methods=["PUT"])
 def update_settings():
     d = request.get_json(force=True) or {}
+    changed = {}
     if "autoscan_hours" in d:
         try:
             h = float(d["autoscan_hours"])
             if h < 0 or h > 168:
                 return jsonify({"ok": False, "error": "0–168 hours"}), 400
             setting_set("autoscan_hours", str(h))
+            changed["autoscan_hours"] = h
         except (ValueError, TypeError):
             return jsonify({"ok": False, "error": "bad number"}), 400
+    if changed:
+        _audit("network_settings_update", details=changed)
     return jsonify({"ok": True})
 
 
@@ -1645,6 +1725,8 @@ def add_type():
             c.execute("""INSERT INTO device_types (key, label, is_builtin, sort_order, created_at)
                          VALUES (?, ?, 0, 500, ?)""",
                       (key, label, int(time.time())))
+        _audit("device_type_create", target=key,
+               details={"key": key, "label": label})
         return jsonify({"ok": True})
     except sqlite3.IntegrityError:
         return jsonify({"ok": False, "error": "тип с таким ключом уже есть"}), 409
@@ -1661,6 +1743,8 @@ def rename_type(key):
         if not r:
             return jsonify({"ok": False, "error": "not found"}), 404
         c.execute("UPDATE device_types SET label = ? WHERE key = ?", (label, key))
+    _audit("device_type_rename", target=key,
+           details={"key": key, "old_label": r["label"], "new_label": label})
     return jsonify({"ok": True})
 
 
@@ -1678,6 +1762,8 @@ def delete_type(key):
             return jsonify({"ok": False,
                             "error": f"тип используется {in_use} устройствами — сначала переназначь"}), 400
         c.execute("DELETE FROM device_types WHERE key = ?", (key,))
+    _audit("device_type_delete", target=key,
+           details={"key": key, "label": r["label"]})
     return jsonify({"ok": True})
 
 

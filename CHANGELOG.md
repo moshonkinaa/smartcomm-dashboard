@@ -2,6 +2,35 @@
 
 Все значимые изменения проекта. Формат — Keep a Changelog + SemVer.
 
+## 2.4.0 — 2026-06-30
+
+**Аудит-лог: full coverage** — закрыты все state-mutating endpoints, фронт показывает детали + фильтры.
+
+Контекст: аудит покрытия выявил **14 state-mutating endpoint'ов в network.py без логирования**, в т.ч. credentials CRUD (security-critical). Также `audit_action()` имел параметр `log_details` который ни разу не использовался — все записи `details=NULL`.
+
+### Added (security-critical)
+- **`_audit()` helper** в `network.py` — пишет в `auth_audit` от текущего юзера. Безопасный (не падает если нет сессии).
+- **14 endpoints теперь логируют действия с метаданными** (никогда не пишем пароли — только `password_changed: true/false`):
+  - **Credentials CRUD** (3): `credential_create/update/delete` — кто/когда/какое устройство, без пароля
+  - **Network device CRUD** (4): `network_device_create/update/delete/bulk_update`
+  - **Network types CRUD** (3): `device_type_create/rename/delete`
+  - **Photos** (2): `device_photo_upload/delete`
+  - **Misc** (2): `network_reclassify`, `network_settings_update`, `network_bulk_tags`
+
+### Added (фильтры)
+- **`/api/auth/audit`** теперь поддерживает: `?action=...` (partial LIKE), `?result=success|fail`, `?to=...` (верхняя граница ts), плюс существующие `since`, `username`, `limit`, `offset`.
+
+### Frontend (audit log UI)
+- **Новые фильтры**: по действию (поиск частичный — «credential» найдёт create/update/delete), по результату (✓/✗), по периоду (час/24ч/7д/30д/всё). Debounce 300мс для текстовых полей.
+- **Новая колонка «Детали»** — раскрывает payload запроса (mac/ip/name/label/etc, без секретов). Полный JSON в tooltip.
+- **20+ новых меток действий** с эмоджи для удобной идентификации.
+
+### Security notes
+- Пароли credentials **никогда** не попадают в audit (даже маскированными). Логируется только факт изменения через флаг `password_changed`.
+- Для DELETE endpoints читаем метаданные ДО удаления — иначе после делита знаем только ID.
+
+---
+
 ## 2.3.2 — 2026-06-30
 
 **Critical fix** — дашборд не auto-started при boot на Pi из-за systemd ordering cycle.

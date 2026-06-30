@@ -712,8 +712,11 @@
 
     <!-- Audit tab -->
     <div class="users-pane" id="pane-audit" style="display:none">
-      <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;font-size:12px;color:var(--text-muted)">
-        <label>Фильтр пользователь: <input type="text" id="audit-filter-user" oninput="auditLoad()" style="padding:5px 8px;font:inherit;font-size:12px;background:var(--bg-inner);color:var(--text);border:1px solid var(--border);border-radius:6px;width:120px"></label>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;font-size:12px;color:var(--text-muted);flex-wrap:wrap">
+        <label>Пользователь: <input type="text" id="audit-filter-user" oninput="auditLoadDebounced()" placeholder="admin" style="padding:5px 8px;font:inherit;font-size:12px;background:var(--bg-inner);color:var(--text);border:1px solid var(--border);border-radius:6px;width:110px"></label>
+        <label>Действие: <input type="text" id="audit-filter-action" oninput="auditLoadDebounced()" placeholder="credential, reboot, …" style="padding:5px 8px;font:inherit;font-size:12px;background:var(--bg-inner);color:var(--text);border:1px solid var(--border);border-radius:6px;width:160px"></label>
+        <label>Результат: <select id="audit-filter-result" onchange="auditLoad()" style="padding:4px 6px;font:inherit;font-size:12px;background:var(--bg-inner);color:var(--text);border:1px solid var(--border);border-radius:6px"><option value="">все</option><option value="success">✓ успех</option><option value="fail">✗ ошибка</option></select></label>
+        <label>За период: <select id="audit-filter-since" onchange="auditLoad()" style="padding:4px 6px;font:inherit;font-size:12px;background:var(--bg-inner);color:var(--text);border:1px solid var(--border);border-radius:6px"><option value="">всё время</option><option value="1h">час</option><option value="24h" selected>24 часа</option><option value="7d">7 дней</option><option value="30d">30 дней</option></select></label>
         <label>Limit: <select id="audit-limit" onchange="auditLoad()" style="padding:4px 6px;font:inherit;font-size:12px;background:var(--bg-inner);color:var(--text);border:1px solid var(--border);border-radius:6px"><option>50</option><option selected>200</option><option>500</option><option>1000</option></select></label>
         <button class="tile-btn" onclick="auditLoad()">⟳ обновить</button>
       </div>
@@ -725,9 +728,10 @@
             <th>IP</th>
             <th>Действие</th>
             <th>Цель</th>
+            <th>Детали</th>
             <th>Результат</th>
           </tr></thead>
-          <tbody id="audit-tbody"><tr><td colspan="6" style="color:var(--text-dim);padding:12px">загрузка…</td></tr></tbody>
+          <tbody id="audit-tbody"><tr><td colspan="7" style="color:var(--text-dim);padding:12px">загрузка…</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -2124,42 +2128,97 @@ async function meChangePassword() {
 }
 
 const _AUDIT_LABELS = {
+  // Auth
   login_success: '🟢 вход', login_failed: '🔴 ошибка входа', logout: '→ выход',
   change_password: '🔑 смена пароля', create_user: '👤+ создание юзера',
   delete_user: '👤🗑 удаление юзера', reset_user_password: '🔑 сброс пароля',
+  // Controller actions
   action_restart_iridium: '↻ restart iRidium', action_start_iridium: '▶ start iRidium',
   action_stop_iridium: '◼ stop iRidium', action_restart_argononed: '↻ restart argononed',
   action_reboot_pi: '⚠ reboot контроллера', action_shutdown_pi: '⊗ shutdown контроллера',
+  // MikroTik / iRidium
   mikrotik_sync: '🔗 sync MikroTik', settings_iridium_changed: '⚙ настройки iRidium',
   settings_mikrotik_changed: '⚙ настройки MikroTik',
+  // Network devices
+  network_device_create: '🖧+ создание девайса', network_device_update: '🖧✎ изменение девайса',
+  network_device_delete: '🖧🗑 удаление девайса', network_device_bulk_update: '🖧⚙ bulk-изменение',
+  network_bulk_tags: '🏷 bulk-теги', network_reclassify: '⚙ переклассификация',
+  network_settings_update: '⚙ настройки сети',
+  // Credentials (security-critical)
+  credential_create: '🔐+ добавлен пароль', credential_update: '🔐✎ изменён пароль',
+  credential_delete: '🔐🗑 удалён пароль',
+  // Photos
+  device_photo_upload: '📷+ загрузка фото', device_photo_delete: '📷🗑 удаление фото',
+  // Device types
+  device_type_create: '🏷+ новый тип', device_type_rename: '🏷✎ переименован тип',
+  device_type_delete: '🏷🗑 удалён тип',
+  // Services
+  services_refresh_catalog: '📦⟳ обновление каталога', service_install: '📦+ установка сервиса',
+  service_uninstall: '📦🗑 удаление сервиса', service_action: '📦⚙ start/stop/restart',
+  service_update: '📦⬆ обновление сервиса', service_settings_update: '📦✎ настройки сервиса',
+  profile_install: '📦📦 установка пакета',
+  // OS updates
+  update_applied: '⬆ применение обновления',
 };
+
+let _AUDIT_TIMER = null;
+function auditLoadDebounced() {
+  if (_AUDIT_TIMER) clearTimeout(_AUDIT_TIMER);
+  _AUDIT_TIMER = setTimeout(auditLoad, 300);
+}
+
+function _auditFormatDetails(d) {
+  // Компактное JSON-отображение, скрываем технические поля
+  if (!d || typeof d !== 'object') return '';
+  const entries = Object.entries(d).filter(([k, v]) =>
+    v !== null && v !== undefined && v !== '');
+  if (!entries.length) return '';
+  return entries.map(([k, v]) => {
+    let val = typeof v === 'object' ? JSON.stringify(v) : String(v);
+    if (val.length > 40) val = val.slice(0, 37) + '…';
+    return `<span style="color:var(--text-dim)">${escapeHtml(k)}=</span>${escapeHtml(val)}`;
+  }).join(' · ');
+}
 
 async function auditLoad() {
   const limit = document.getElementById('audit-limit').value || 200;
   const user = document.getElementById('audit-filter-user').value.trim();
+  const action = document.getElementById('audit-filter-action').value.trim();
+  const result = document.getElementById('audit-filter-result').value;
+  const since = document.getElementById('audit-filter-since').value;
   let url = '/api/auth/audit?limit=' + limit;
   if (user) url += '&username=' + encodeURIComponent(user);
+  if (action) url += '&action=' + encodeURIComponent(action);
+  if (result) url += '&result=' + encodeURIComponent(result);
+  if (since) {
+    const secsMap = { '1h': 3600, '24h': 86400, '7d': 604800, '30d': 2592000 };
+    const sinceTs = Math.floor(Date.now() / 1000) - (secsMap[since] || 0);
+    url += '&since=' + sinceTs;
+  }
   try {
     const j = await (await fetch(url)).json();
     const tbody = document.getElementById('audit-tbody');
     if (!j.audit || !j.audit.length) {
-      tbody.innerHTML = '<tr><td colspan="6" style="color:var(--text-dim);padding:12px">нет записей</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" style="color:var(--text-dim);padding:12px">нет записей</td></tr>';
       return;
     }
     tbody.innerHTML = j.audit.map(r => {
       const label = _AUDIT_LABELS[r.action] || r.action;
       const cls = r.result === 'fail' ? 'audit-action-fail' : 'audit-action-success';
+      const detailsHtml = _auditFormatDetails(r.details);
+      const fullDetails = r.details ? JSON.stringify(r.details) : '';
       return `<tr>
         <td style="color:var(--text-dim);font-family:var(--mono);font-size:11px;white-space:nowrap">${new Date(r.ts*1000).toLocaleString('ru-RU')}</td>
         <td>${r.username ? escapeHtml(r.username) : '<span style="color:var(--text-dim)">—</span>'}</td>
         <td style="color:var(--text-dim);font-family:var(--mono);font-size:11px">${escapeHtml(r.ip || '—')}</td>
         <td class="${cls}">${escapeHtml(label)}</td>
         <td style="color:var(--text-muted);font-size:11px;word-break:break-word">${escapeHtml(r.target || '')}</td>
+        <td style="font-size:10.5px;font-family:var(--mono);color:var(--text);max-width:340px;word-break:break-word" title="${escapeHtml(fullDetails)}">${detailsHtml}</td>
         <td>${r.result === 'fail' ? '<span style="color:var(--err)">✗</span>' : '<span style="color:var(--ok)">✓</span>'}</td>
       </tr>`;
     }).join('');
   } catch (e) {
-    document.getElementById('audit-tbody').innerHTML = '<tr><td colspan="6" style="color:var(--err)">ошибка: ' + e.message + '</td></tr>';
+    document.getElementById('audit-tbody').innerHTML = '<tr><td colspan="7" style="color:var(--err)">ошибка: ' + e.message + '</td></tr>';
   }
 }
 

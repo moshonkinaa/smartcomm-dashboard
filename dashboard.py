@@ -104,7 +104,7 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "2.3.2"
+VERSION = "2.4.0"
 RELEASE_DATE = "2026-06-30"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # Минимальная версия клиента (PWA/cache) с которой backend ещё совместим.
@@ -1945,9 +1945,15 @@ def api_auth_audit():
     offset = max(0, int(request.args.get("offset", "0")))
     since_ts = request.args.get("since")
     since_ts = int(since_ts) if since_ts else None
+    to_ts = request.args.get("to")
+    to_ts = int(to_ts) if to_ts else None
     username = request.args.get("username")
+    action = request.args.get("action")        # partial match (LIKE %X%)
+    result = request.args.get("result")        # "success" | "fail"
     return jsonify({
-        "audit": network_bp.auth_get_audit(limit, offset, since_ts, username),
+        "audit": network_bp.auth_get_audit(limit, offset, since_ts, username,
+                                            action=action, to_ts=to_ts,
+                                            result=result),
     })
 
 
