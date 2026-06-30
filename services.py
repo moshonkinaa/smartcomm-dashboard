@@ -358,18 +358,55 @@ def _db():
 
 
 def list_installed():
-    """Из БД — что установлено. Возвращает список dict'ов."""
+    """Из БД — что установлено. Возвращает список dict'ов.
+
+    Включает поля из миграции v3 (health, uptime, restart). На старых БД
+    (до миграции) — Python sqlite вернёт KeyError; ловим и fallback на старый
+    набор полей."""
     try:
         with _db() as c:
-            rows = c.execute("""
-                SELECT id, catalog_version, status, installed_at, last_started_at,
-                       last_action_at, last_error, auto_update, notes, settings_json
-                FROM installed_services
-                ORDER BY installed_at DESC
-            """).fetchall()
+            try:
+                rows = c.execute("""
+                    SELECT id, catalog_version, status, installed_at, last_started_at,
+                           last_action_at, last_error, auto_update, notes, settings_json,
+                           last_auto_update_at, last_auto_update_ok,
+                           restart_count, last_health_check_at, last_health_status,
+                           last_health_code, last_health_rtt_ms,
+                           uptime_running_seconds, last_status_change_at
+                    FROM installed_services
+                    ORDER BY installed_at DESC
+                """).fetchall()
+            except sqlite3.OperationalError:
+                # Колонки v3 ещё не созданы (миграция ещё не прошла на этом инстансе)
+                rows = c.execute("""
+                    SELECT id, catalog_version, status, installed_at, last_started_at,
+                           last_action_at, last_error, auto_update, notes, settings_json
+                    FROM installed_services
+                    ORDER BY installed_at DESC
+                """).fetchall()
         return [dict(r) for r in rows]
     except sqlite3.Error:
         return []
+
+
+def compute_uptime_pct(inst, window_sec=86400):
+    """% времени когда сервис был running за последние window_sec.
+    Использует uptime_running_seconds + текущий running-интервал если активен."""
+    if not inst:
+        return None
+    uptime_acc = inst.get("uptime_running_seconds") or 0
+    last_change = inst.get("last_status_change_at")
+    installed_at = inst.get("installed_at") or 0
+    now = int(time.time())
+    # Если сейчас running и есть последняя смена статуса — добавляем текущий интервал
+    if inst.get("status") == "running" and last_change:
+        uptime_acc += max(0, now - last_change)
+    # Окно: с момента install ИЛИ window_sec — что короче
+    window_start = max(installed_at, now - window_sec)
+    actual_window = now - window_start
+    if actual_window <= 0:
+        return None
+    return round(100 * min(uptime_acc, actual_window) / actual_window, 1)
 
 
 def update_settings(service_id, notes=None, auto_update=None):
@@ -760,7 +797,10 @@ def sync_statuses():
         else:
             new_status = "stopped"   # mix running+exited — partial stop
         if new_status != inst.get("status"):
+            prev_status = inst.get("status")
             _db_upsert_installed(sid, status=new_status)
+            # Записать переход (uptime / restart_count)
+            _update_uptime_and_restarts(prev_status, new_status, sid, int(time.time()))
 
 
 def discover_existing():
@@ -895,12 +935,208 @@ def get_service_stats(service_id):
     }
 
 
+def _save_metrics_sample():
+    """Сохранить snapshot _STATS (per-container) → service_metrics (per-service aggregate).
+    Ring buffer: удаляем строки старше 24 часов раз в 12 циклов (~6 минут)."""
+    installed = list_installed()
+    if not installed:
+        return
+    now = int(time.time())
+    try:
+        with sqlite3.connect(DB_PATH, timeout=5.0) as conn:
+            cur = conn.cursor()
+            for inst in installed:
+                stats = get_service_stats(inst["id"])
+                if not stats:
+                    continue
+                cur.execute("""
+                    INSERT INTO service_metrics
+                        (service_id, ts, cpu_pct, mem_mb, mem_pct, net_rx_mb, net_tx_mb)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (inst["id"], now, stats["cpu_pct"], stats["mem_mb"],
+                      stats["mem_pct"], stats["net_rx_mb"], stats["net_tx_mb"]))
+            # Retention: ring buffer 24h. Delete редко (раз в ~6 мин) чтобы не
+            # нагружать БД при каждом сэмпле.
+            global _METRICS_PRUNE_COUNTER
+            _METRICS_PRUNE_COUNTER += 1
+            if _METRICS_PRUNE_COUNTER >= 12:
+                _METRICS_PRUNE_COUNTER = 0
+                cutoff = now - 86400
+                cur.execute("DELETE FROM service_metrics WHERE ts < ?", (cutoff,))
+    except sqlite3.Error as e:
+        print(f"[services-metrics] db error: {e}")
+
+
+_METRICS_PRUNE_COUNTER = 0
+
+
+def get_metrics_history(service_id, range_sec=86400, max_points=288):
+    """Time-series метрик за range_sec секунд. Downsample до max_points точек."""
+    cutoff = int(time.time()) - range_sec
+    try:
+        with sqlite3.connect(DB_PATH, timeout=5.0) as conn:
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            rows = cur.execute("""
+                SELECT ts, cpu_pct, mem_mb, mem_pct, net_rx_mb, net_tx_mb
+                  FROM service_metrics
+                 WHERE service_id = ? AND ts >= ?
+                 ORDER BY ts ASC
+            """, (service_id, cutoff)).fetchall()
+    except sqlite3.Error:
+        return []
+    if not rows:
+        return []
+    # Downsample равномерно если точек больше чем max_points
+    if len(rows) > max_points:
+        step = len(rows) / max_points
+        sampled = [rows[int(i * step)] for i in range(max_points)]
+    else:
+        sampled = rows
+    return [dict(r) for r in sampled]
+
+
+# ============ Health monitoring ============
+
+def _http_probe(url, timeout=3):
+    """Простой HTTP HEAD probe. Возвращает (status_code, rtt_ms) или (None, None)."""
+    if not url:
+        return None, None
+    import urllib.request
+    import urllib.error
+    t0 = time.time()
+    try:
+        # HEAD сначала; если не поддерживается (405) — fallback на GET
+        req = urllib.request.Request(url, method="HEAD")
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            rtt = int((time.time() - t0) * 1000)
+            return r.status, rtt
+    except urllib.error.HTTPError as e:
+        # HTTPError всё ещё означает что сервер ответил — это OK
+        rtt = int((time.time() - t0) * 1000)
+        if e.code == 405:  # HEAD не поддерживается — попробуем GET
+            try:
+                t0 = time.time()
+                with urllib.request.urlopen(url, timeout=timeout) as r:
+                    rtt = int((time.time() - t0) * 1000)
+                    return r.status, rtt
+            except Exception:
+                return None, None
+        return e.code, rtt
+    except (urllib.error.URLError, OSError, ValueError, TimeoutError):
+        return None, None
+
+
+def _check_service_health(service_id):
+    """Проверяет health одного сервиса. Записывает результат в installed_services."""
+    catalog_svc = _find_service_in_catalog(service_id)
+    if not catalog_svc:
+        return
+    web_url = catalog_svc.get("web_url", "")
+    if not web_url or "{CONTROLLER}" not in web_url and not web_url.startswith("http"):
+        return
+    # Подставляем {CONTROLLER} = 127.0.0.1 (мы локальные — нет смысла идти по сети)
+    probe_url = web_url.replace("{CONTROLLER}", "127.0.0.1")
+    status, rtt = _http_probe(probe_url, timeout=3)
+    # Классификация: 2xx/3xx → healthy, 4xx/5xx → degraded, нет ответа → down
+    if status is None:
+        health = "down"
+    elif 200 <= status < 400:
+        health = "healthy"
+    else:
+        health = "degraded"
+    now = int(time.time())
+    try:
+        with sqlite3.connect(DB_PATH, timeout=5.0) as conn:
+            conn.execute("""
+                UPDATE installed_services
+                   SET last_health_check_at = ?, last_health_status = ?,
+                       last_health_code = ?, last_health_rtt_ms = ?
+                 WHERE id = ?
+            """, (now, health, status, rtt, service_id))
+    except sqlite3.Error:
+        pass
+
+
+def _check_all_health():
+    """Health check для всех running сервисов. Вызывается раз в 60 сек."""
+    for inst in list_installed():
+        if inst.get("status") != "running":
+            continue
+        try:
+            _check_service_health(inst["id"])
+        except Exception as e:
+            print(f"[health] error for {inst['id']}: {e}")
+
+
+def _find_service_in_catalog(sid):
+    """Helper — найти manifest по id (cached в _CATALOG_CACHE)."""
+    for svc in load_catalog():
+        if svc.get("id") == sid:
+            return svc
+    return None
+
+
+# ============ Restart counter + uptime tracking ============
+
+def _update_uptime_and_restarts(prev_status, new_status, sid, now):
+    """Когда статус меняется — обновляем uptime/restart_count.
+
+    - running → stopped/error: добавляем (now - last_status_change_at) к uptime
+    - stopped/error → running: если был не initial install (есть last_status_change_at),
+      это рестарт → инкрементим restart_count
+    """
+    try:
+        with sqlite3.connect(DB_PATH, timeout=5.0) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT last_status_change_at, uptime_running_seconds, restart_count "
+                "FROM installed_services WHERE id = ?", (sid,)
+            ).fetchone()
+            if not row:
+                return
+            updates = ["last_status_change_at = ?"]
+            params = [now]
+            # Был running и стал не-running — закрываем running-интервал
+            if prev_status == "running" and new_status != "running":
+                last_change = row["last_status_change_at"] or now
+                interval = max(0, now - last_change)
+                new_uptime = (row["uptime_running_seconds"] or 0) + interval
+                updates.append("uptime_running_seconds = ?")
+                params.append(new_uptime)
+            # Стал running и был ДО этого не-running (и это не первый старт после install) —
+            # инкрементим restart_count
+            elif new_status == "running" and prev_status in ("stopped", "error"):
+                new_count = (row["restart_count"] or 0) + 1
+                updates.append("restart_count = ?")
+                params.append(new_count)
+            params.append(sid)
+            conn.execute(
+                f"UPDATE installed_services SET {', '.join(updates)} WHERE id = ?",
+                params
+            )
+    except sqlite3.Error:
+        pass
+
+
+# ============ Sampler loop ============
+
+_HEALTH_CHECK_COUNTER = 0
+
+
 def _status_sampler_loop():
-    """Раз в 30 сек обновляем статусы + ресурсы installed-сервисов."""
+    """Раз в 30 сек обновляем статусы + ресурсы + метрики. Health — раз в 60 сек."""
+    global _HEALTH_CHECK_COUNTER
     while True:
         try:
             sync_statuses()
             _sample_docker_stats()
+            _save_metrics_sample()
+            # Health check каждый 2-й цикл (раз в 60 сек)
+            _HEALTH_CHECK_COUNTER += 1
+            if _HEALTH_CHECK_COUNTER >= 2:
+                _HEALTH_CHECK_COUNTER = 0
+                _check_all_health()
         except Exception as e:
             print(f"[services-sampler] error: {e}")
         time.sleep(30)

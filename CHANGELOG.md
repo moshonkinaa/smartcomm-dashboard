@@ -2,6 +2,33 @@
 
 Все значимые изменения проекта. Формат — Keep a Changelog + SemVer.
 
+## 2.5.0 — 2026-06-30
+
+**Services: core diagnostics** — health badges, time-series графики ресурсов, uptime/restart счётчики.
+
+### Backend
+- **Schema migration v3** (`network.py`): новая таблица `service_metrics` (ring-buffer 24ч) + новые колонки `installed_services`: `restart_count`, `last_health_check_at`, `last_health_status`, `last_health_code`, `last_health_rtt_ms`, `uptime_running_seconds`, `last_status_change_at`.
+- **Time-series sampler** (`services.py:_save_metrics_sample()`): пишет CPU/RAM/Net per-service в БД каждые 30 сек. Retention 24ч, prune раз в ~6 мин.
+- **Health monitor** (`services.py:_check_all_health()`): HTTP HEAD probe на `web_url` каждые 60 сек, классификация healthy/degraded/down + RTT.
+- **Uptime/restart tracker** (`services.py:_update_uptime_and_restarts()`): при смене статуса `sync_statuses()` инкрементит счётчики; uptime_running_seconds накапливается за всё время.
+- **`compute_uptime_pct(inst, 86400)`** — uptime % за 24ч на лету.
+
+### API
+- **`/api/services/<id>/metrics?range=86400&max_points=288`** — time-series (5 мин – 7 дней), downsample равномерно.
+- `/api/services/catalog` теперь возвращает `_uptime_pct_24h`, health поля в `_installed`.
+
+### Frontend
+- **Health dot** (🟢/🟡/🔴/○/●) перед именем сервиса на карточке. Tooltip: HTTP code + RTT. Down — pulse animation.
+- **Stat badges** на карточке: `↑ 99.5%` uptime, `↻ 3` restart count (только если > 0). Цвет: ok/warn/err.
+- **Chart.js график** в модалке Ресурсы: CPU% (синий) + RAM MB (зелёный), 4 диапазона (1ч/6ч/24ч/7д). Двойная Y-ось.
+- **Раздел «Стабильность»** в модалке: uptime % за 24ч + restart count + health status с RTT.
+
+### Notes
+- Метрики начнут накапливаться **после deploy v2.5** — первые 24ч графики будут неполными. Это нормально.
+- Health-check только для сервисов с `web_url` в манифесте. Probe идёт на `127.0.0.1` (локально), не нагружает сеть.
+
+---
+
 ## 2.4.0 — 2026-06-30
 
 **Аудит-лог: full coverage** — закрыты все state-mutating endpoints, фронт показывает детали + фильтры.

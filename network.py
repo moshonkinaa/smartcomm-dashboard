@@ -83,9 +83,45 @@ def _migrate_v2_auto_update_columns(c):
             pass   # column уже есть
 
 
+def _migrate_v3_service_metrics(c):
+    """v2.5.0: time-series метрики per-service (CPU/RAM/Net) — ring buffer 24h,
+    health monitoring + restart counter."""
+    # Time-series table — ring buffer, retention 24h в _save_metrics_sample
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS service_metrics (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        service_id  TEXT NOT NULL,
+        ts          INTEGER NOT NULL,
+        cpu_pct     REAL,
+        mem_mb      REAL,
+        mem_pct     REAL,
+        net_rx_mb   REAL,
+        net_tx_mb   REAL
+    )
+    """)
+    c.execute("CREATE INDEX IF NOT EXISTS idx_metrics_sid_ts "
+              "ON service_metrics(service_id, ts)")
+    # Новые колонки в installed_services — для health/uptime/restart
+    for col_sql in (
+        "ALTER TABLE installed_services ADD COLUMN restart_count INTEGER DEFAULT 0",
+        "ALTER TABLE installed_services ADD COLUMN last_health_check_at INTEGER",
+        "ALTER TABLE installed_services ADD COLUMN last_health_status TEXT",
+        "ALTER TABLE installed_services ADD COLUMN last_health_rtt_ms INTEGER",
+        "ALTER TABLE installed_services ADD COLUMN last_health_code INTEGER",
+        # uptime_running_seconds: накопленное running-время с момента install
+        "ALTER TABLE installed_services ADD COLUMN uptime_running_seconds INTEGER DEFAULT 0",
+        "ALTER TABLE installed_services ADD COLUMN last_status_change_at INTEGER",
+    ):
+        try:
+            c.execute(col_sql)
+        except sqlite3.OperationalError:
+            pass
+
+
 MIGRATIONS = [
     (1, "v1.5.0 installed_services table", _migrate_v1_installed_services),
     (2, "v2.2.0 auto-update tracking columns", _migrate_v2_auto_update_columns),
+    (3, "v2.5.0 service_metrics + health/restart columns", _migrate_v3_service_metrics),
 ]
 
 # Auto-computed: max version из MIGRATIONS или 0 если пуст.

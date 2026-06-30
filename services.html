@@ -110,6 +110,25 @@
   .badge.error { color: var(--err); border-color: rgba(226,75,74,0.4); background: rgba(226,75,74,0.15); }
   .badge.incompat { color: var(--text-dim); }
 
+  /* v2.5: Health dot + stat badges */
+  .health-dot { display: inline-block; font-size: 11px; margin-right: 2px; vertical-align: middle; cursor: help; }
+  .health-dot.ok      { color: var(--ok); }
+  .health-dot.warn    { color: var(--warn); }
+  .health-dot.err     { color: var(--err); animation: pulse 1.6s ease-in-out infinite; }
+  .health-dot.pending { color: var(--text-dim); }
+  .health-dot.off     { color: var(--text-dim); opacity: 0.5; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+  .badge.stat-badge        { color: var(--text-muted); font-family: var(--mono); font-size: 10.5px; padding: 1px 6px; }
+  .badge.stat-badge.ok     { color: var(--ok); border-color: rgba(29,158,117,0.35); background: rgba(29,158,117,0.1); }
+  .badge.stat-badge.warn   { color: var(--warn); border-color: rgba(239,159,39,0.35); background: rgba(239,159,39,0.1); }
+  .badge.stat-badge.err    { color: var(--err); border-color: rgba(226,75,74,0.35); background: rgba(226,75,74,0.1); }
+
+  /* v2.5: Chart canvas в модалке */
+  .metrics-chart-wrap { position: relative; height: 220px; margin-top: 6px; padding: 8px; background: var(--bg-inner); border: 1px solid var(--border); border-radius: 8px; }
+  .chart-range-tabs { display: flex; gap: 6px; margin-bottom: 4px; font-size: 11px; }
+  .chart-range-tabs button { background: transparent; border: 1px solid var(--border); color: var(--text-muted); padding: 2px 10px; border-radius: 11px; cursor: pointer; font: inherit; font-size: 11px; }
+  .chart-range-tabs button.active { background: var(--accent); color: white; border-color: var(--accent); }
+
   /* Empty catalog state */
   .empty { padding: 40px; text-align: center; color: var(--text-muted); background: var(--bg-card); border: 1px dashed var(--border); border-radius: var(--r-lg); }
 
@@ -205,6 +224,10 @@
 
 <!-- Toast -->
 <div id="toast" style="position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--bg-card);border:1px solid var(--border);border-radius:9px;padding:10px 18px;font-size:12.5px;display:none;z-index:1000;box-shadow:0 4px 12px rgba(0,0,0,0.18)"></div>
+
+<!-- Chart.js — для time-series графиков resource usage (v2.5+).
+     Используем тот же файл chart.min.js что и /index — он уже задеплоен в /opt/smartcomm-dashboard. -->
+<script src="/chart.min.js"></script>
 
 <script>
 const CATEGORIES = {
@@ -337,6 +360,29 @@ function renderCatalog() {
   container.innerHTML = filtered.map(s => cardHtml(s)).join('');
 }
 
+function healthDot(inst) {
+  // Возвращает цветной кружок + tooltip для health-status
+  if (!inst) return '';
+  const status = inst.last_health_status;
+  const rtt = inst.last_health_rtt_ms;
+  const code = inst.last_health_code;
+  if (inst.status !== 'running') {
+    return '<span class="health-dot off" title="сервис остановлен">●</span>';
+  }
+  if (!status) {
+    // running но нет данных health-check (запустился < 60с назад или нет web_url)
+    return '<span class="health-dot pending" title="ждём health-check">○</span>';
+  }
+  const tooltip = `HTTP ${code || '?'} · ${rtt || '?'}мс`;
+  if (status === 'healthy') {
+    return `<span class="health-dot ok" title="✓ ${tooltip}">●</span>`;
+  } else if (status === 'degraded') {
+    return `<span class="health-dot warn" title="⚠ ${tooltip}">●</span>`;
+  } else {
+    return `<span class="health-dot err" title="✗ ${tooltip}">●</span>`;
+  }
+}
+
 function cardHtml(s) {
   const inst = s._installed;
   let statusBadge = '';
@@ -358,12 +404,27 @@ function cardHtml(s) {
   const reqs = s.requirements || {};
   const ramGb = reqs.min_ram_mb ? (Math.round(reqs.min_ram_mb / 1024 * 10) / 10 + ' GB RAM') : '';
   const diskGb = reqs.min_disk_gb ? (reqs.min_disk_gb + ' GB disk') : '';
+
+  // v2.5: health/uptime/restart на инсталлированных карточках
+  const healthHtml = healthDot(inst);
+  let extraBadges = '';
+  if (inst) {
+    if (s._uptime_pct_24h !== undefined && s._uptime_pct_24h !== null) {
+      const up = s._uptime_pct_24h;
+      const cls = up >= 99 ? 'ok' : up >= 90 ? 'warn' : 'err';
+      extraBadges += `<span class="badge stat-badge ${cls}" title="uptime за 24ч">↑ ${up}%</span>`;
+    }
+    if (inst.restart_count > 0) {
+      extraBadges += `<span class="badge stat-badge" title="кол-во рестартов">↻ ${inst.restart_count}</span>`;
+    }
+  }
+
   return `
     <div class="${cardClass}" onclick="openServiceModal('${escapeHtml(s.id)}')">
       <div class="card-head">
         <div class="card-icon">${categoryIcon(s.category)}</div>
         <div class="card-title-block">
-          <p class="card-name">${escapeHtml(s.name)}</p>
+          <p class="card-name">${healthHtml} ${escapeHtml(s.name)}</p>
           <p class="card-tag">${escapeHtml(s.tagline || '')}</p>
         </div>
       </div>
@@ -372,6 +433,7 @@ function cardHtml(s) {
         <span class="badge cat cat-${escapeHtml(s.category)}">${escapeHtml(s.category)}</span>
         ${s._stats ? `<span class="badge" title="live resource usage">⚡ ${s._stats.cpu_pct}% · ${s._stats.mem_mb >= 1024 ? (s._stats.mem_mb/1024).toFixed(1)+'G' : Math.round(s._stats.mem_mb)+'M'}</span>` : (ramGb ? `<span class="badge">${ramGb}</span>` : '')}
         ${!s._stats && diskGb ? `<span class="badge">${diskGb}</span>` : ''}
+        ${extraBadges}
         ${statusBadge}
       </div>
     </div>`;
@@ -413,12 +475,38 @@ async function openServiceModal(id) {
     </div>
     ${svc._installed && svc._stats ? `
     <div class="modal-section">
-      <h3>Ресурсы (live, обновление 30с)</h3>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px">
+      <h3>Ресурсы (live + история)</h3>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin-bottom:10px">
         <div class="stat"><div class="stat-val">${svc._stats.cpu_pct}%</div><div class="stat-label">CPU</div></div>
         <div class="stat"><div class="stat-val">${svc._stats.mem_mb >= 1024 ? (svc._stats.mem_mb/1024).toFixed(1) + ' GB' : Math.round(svc._stats.mem_mb) + ' MB'}</div><div class="stat-label">RAM (${svc._stats.mem_pct}%)</div></div>
         <div class="stat"><div class="stat-val">${svc._stats.net_rx_mb.toFixed(1)} MB</div><div class="stat-label">Net RX</div></div>
         <div class="stat"><div class="stat-val">${svc._stats.net_tx_mb.toFixed(1)} MB</div><div class="stat-label">Net TX</div></div>
+      </div>
+      <div class="chart-range-tabs">
+        <button onclick="loadMetricsChart('${escapeHtml(svc.id)}', 3600, this)">1ч</button>
+        <button class="active" onclick="loadMetricsChart('${escapeHtml(svc.id)}', 21600, this)">6ч</button>
+        <button onclick="loadMetricsChart('${escapeHtml(svc.id)}', 86400, this)">24ч</button>
+        <button onclick="loadMetricsChart('${escapeHtml(svc.id)}', 604800, this)">7д</button>
+      </div>
+      <div class="metrics-chart-wrap"><canvas id="metrics-chart"></canvas></div>
+      <p class="fs-sm text-dim mt-2" style="margin-bottom:0">⚡ обновление каждые 30 сек · история ring-buffer 24ч (старее — downsample)</p>
+    </div>` : ''}
+    ${svc._installed ? `
+    <div class="modal-section">
+      <h3>Стабильность</h3>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px">
+        <div class="stat">
+          <div class="stat-val ${(svc._uptime_pct_24h ?? 100) >= 99 ? '' : 'text-warn'}">${svc._uptime_pct_24h !== undefined && svc._uptime_pct_24h !== null ? svc._uptime_pct_24h + '%' : '—'}</div>
+          <div class="stat-label">uptime за 24ч</div>
+        </div>
+        <div class="stat">
+          <div class="stat-val ${(svc._installed.restart_count || 0) > 5 ? 'text-warn' : ''}">${svc._installed.restart_count || 0}</div>
+          <div class="stat-label">рестартов</div>
+        </div>
+        <div class="stat">
+          <div class="stat-val" title="${svc._installed.last_health_code ? 'HTTP ' + svc._installed.last_health_code : ''}">${svc._installed.last_health_status ? healthLabel(svc._installed.last_health_status) : '—'}</div>
+          <div class="stat-label">health · ${svc._installed.last_health_rtt_ms ? svc._installed.last_health_rtt_ms + 'мс' : '—'}</div>
+        </div>
       </div>
     </div>` : ''}
     ${svc._installed ? `
@@ -453,6 +541,105 @@ async function openServiceModal(id) {
   document.getElementById('svc-modal').classList.add('show');
   // Параллельно дёргаем pre-check
   loadPreCheck(svc.id);
+  // Если сервис установлен — загружаем график за 6ч (default tab)
+  if (svc._installed && svc._stats) {
+    setTimeout(() => loadMetricsChart(svc.id, 21600, null), 100);
+  }
+}
+
+function healthLabel(status) {
+  if (status === 'healthy')  return '🟢 ok';
+  if (status === 'degraded') return '🟡 slow';
+  if (status === 'down')     return '🔴 down';
+  return status;
+}
+
+let _metricsChart = null;
+async function loadMetricsChart(serviceId, rangeSec, tabBtn) {
+  // Обновляем active-tab
+  if (tabBtn) {
+    document.querySelectorAll('.chart-range-tabs button').forEach(b => b.classList.remove('active'));
+    tabBtn.classList.add('active');
+  }
+  const canvas = document.getElementById('metrics-chart');
+  if (!canvas) return;
+  try {
+    const r = await fetch('/api/services/' + encodeURIComponent(serviceId) + '/metrics?range=' + rangeSec);
+    const j = await r.json();
+    if (!j.ok || !j.points || !j.points.length) {
+      canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#888';
+      ctx.font = '13px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('Данных пока нет (sampler собирает раз в 30 сек)', canvas.width / 2, canvas.height / 2);
+      return;
+    }
+    const points = j.points;
+    // Используем category axis (string labels) — chart.min.js без time-adapter.
+    // Формат label зависит от range: <1ч → HH:MM, иначе → DD.MM HH:MM
+    const fmt = (ts) => {
+      const d = new Date(ts * 1000);
+      const hh = String(d.getHours()).padStart(2, '0');
+      const mm = String(d.getMinutes()).padStart(2, '0');
+      if (rangeSec <= 3600) return `${hh}:${mm}`;
+      const day = String(d.getDate()).padStart(2, '0');
+      const mon = String(d.getMonth() + 1).padStart(2, '0');
+      return `${day}.${mon} ${hh}:${mm}`;
+    };
+    const labels = points.map(p => fmt(p.ts));
+    const cpu = points.map(p => p.cpu_pct);
+    const mem = points.map(p => p.mem_mb);
+    if (_metricsChart) _metricsChart.destroy();
+    // Resolve CSS variable colors at runtime — иначе Chart.js не понимает var()
+    const cs = getComputedStyle(document.body);
+    const accentBlue = (cs.getPropertyValue('--accent') || '#378ADD').trim();
+    const accentGreen = (cs.getPropertyValue('--ok') || '#1D9E75').trim();
+    const textMuted = (cs.getPropertyValue('--text-muted') || '#9aa1ad').trim();
+    const gridColor = (cs.getPropertyValue('--border') || '#2a2e36').trim();
+    _metricsChart = new Chart(canvas.getContext('2d'), {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [
+          { label: 'CPU %', data: cpu, yAxisID: 'y_cpu',
+            borderColor: accentBlue, backgroundColor: 'rgba(55,138,221,0.12)',
+            borderWidth: 1.5, fill: true, tension: 0.25, pointRadius: 0 },
+          { label: 'RAM MB', data: mem, yAxisID: 'y_mem',
+            borderColor: accentGreen, backgroundColor: 'rgba(29,158,117,0.12)',
+            borderWidth: 1.5, fill: true, tension: 0.25, pointRadius: 0 },
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: false,
+        interaction: { mode: 'index', intersect: false },
+        scales: {
+          x: {
+            ticks: { color: textMuted, font: { size: 10 }, maxTicksLimit: 8, maxRotation: 0 },
+            grid: { color: gridColor, drawBorder: false },
+          },
+          y_cpu: {
+            position: 'left', beginAtZero: true,
+            title: { display: true, text: 'CPU %', color: accentBlue, font: { size: 10 } },
+            ticks: { color: textMuted, font: { size: 10 } },
+            grid: { color: gridColor, drawBorder: false },
+          },
+          y_mem: {
+            position: 'right', beginAtZero: true,
+            title: { display: true, text: 'RAM MB', color: accentGreen, font: { size: 10 } },
+            ticks: { color: textMuted, font: { size: 10 } },
+            grid: { display: false },
+          },
+        },
+        plugins: {
+          legend: { labels: { color: textMuted, font: { size: 11 } } },
+          tooltip: { mode: 'index', intersect: false },
+        },
+      }
+    });
+  } catch (e) {
+    console.error('metrics chart error', e);
+  }
 }
 
 async function loadPreCheck(id) {

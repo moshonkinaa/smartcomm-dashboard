@@ -104,7 +104,7 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "2.4.0"
+VERSION = "2.5.0"
 RELEASE_DATE = "2026-06-30"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # Минимальная версия клиента (PWA/cache) с которой backend ещё совместим.
@@ -2003,8 +2003,12 @@ def api_services_catalog():
         item = dict(svc)
         item["_compatible"] = compatible
         item["_incompat_reason"] = None if compatible else reason
-        item["_installed"] = installed_map.get(svc["id"])  # None или dict
-        item["_stats"] = services_mod.get_service_stats(svc["id"]) if item["_installed"] else None
+        inst = installed_map.get(svc["id"])
+        item["_installed"] = inst   # None или dict
+        item["_stats"] = services_mod.get_service_stats(svc["id"]) if inst else None
+        # v2.5: uptime % за 24h — вычисляется на лету
+        if inst:
+            item["_uptime_pct_24h"] = services_mod.compute_uptime_pct(inst, 86400)
         items.append(item)
     return jsonify({
         "ok": True,
@@ -2131,6 +2135,22 @@ def api_services_stats(service_id):
     if not s:
         return jsonify({"ok": False, "message": "stats not available yet (sampler runs every 30s)"})
     return jsonify({"ok": True, **s})
+
+
+@app.route("/api/services/<service_id>/metrics")
+@requires_auth
+def api_services_metrics(service_id):
+    """Time-series метрик за range секунд. Default 24h, downsample до max_points точек."""
+    try:
+        range_sec = int(request.args.get("range", "86400"))   # 24h по умолчанию
+        max_points = max(50, min(int(request.args.get("max_points", "288")), 2000))
+    except ValueError:
+        return jsonify({"ok": False, "error": "bad range/max_points"}), 400
+    # Защита от слишком больших запросов
+    range_sec = max(300, min(range_sec, 7 * 86400))   # от 5 мин до 7 дней
+    points = services_mod.get_metrics_history(service_id, range_sec, max_points)
+    return jsonify({"ok": True, "points": points, "range_sec": range_sec,
+                    "count": len(points)})
 
 
 @app.route("/api/services/profiles")
