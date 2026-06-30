@@ -118,10 +118,19 @@ def _migrate_v3_service_metrics(c):
             pass
 
 
+def _migrate_v4_custom_tags(c):
+    """v3.0.0: пользовательские теги per-service."""
+    try:
+        c.execute("ALTER TABLE installed_services ADD COLUMN custom_tags TEXT DEFAULT '[]'")
+    except sqlite3.OperationalError:
+        pass
+
+
 MIGRATIONS = [
     (1, "v1.5.0 installed_services table", _migrate_v1_installed_services),
     (2, "v2.2.0 auto-update tracking columns", _migrate_v2_auto_update_columns),
     (3, "v2.5.0 service_metrics + health/restart columns", _migrate_v3_service_metrics),
+    (4, "v3.0.0 custom_tags column", _migrate_v4_custom_tags),
 ]
 
 # Auto-computed: max version из MIGRATIONS или 0 если пуст.

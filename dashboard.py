@@ -104,7 +104,7 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "2.6.0"
+VERSION = "3.0.0"
 RELEASE_DATE = "2026-06-30"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # Минимальная версия клиента (PWA/cache) с которой backend ещё совместим.
@@ -2137,6 +2137,54 @@ def api_services_network(service_id):
         return jsonify({"ok": False, "error": "compose.yml не найден"}), 404
     # Добавляем external base url из CONTROLLER:host_port
     return jsonify({"ok": True, **info})
+
+
+@app.route("/api/services/<service_id>/changelog")
+@requires_auth
+def api_services_changelog(service_id):
+    """Latest releases from upstream GitHub repo (если catalog YAML имеет
+    image_origin.github). Кешируется на 1ч."""
+    data = services_mod.get_changelog(service_id, max_entries=5)
+    if data is None:
+        return jsonify({"ok": False,
+                        "error": "changelog не настроен (нет image_origin.github в манифесте)"}), 404
+    return jsonify({"ok": True, "releases": data})
+
+
+@app.route("/api/services/<service_id>/tags", methods=["GET"])
+@requires_auth
+def api_services_tags_get(service_id):
+    """Кастомные теги сервиса."""
+    return jsonify({"ok": True,
+                    "tags": services_mod.get_custom_tags(service_id),
+                    "all_tags": services_mod.list_all_custom_tags()})
+
+
+@app.route("/api/services/<service_id>/tags", methods=["PUT"])
+@requires_admin
+@audit_action("service_tags_update", target_from_path=True,
+              log_details=lambda: {"tags": (request.get_json(force=True, silent=True) or {}).get("tags")})
+def api_services_tags_set(service_id):
+    """Установить полный список тегов (replace, не append)."""
+    d = request.get_json(force=True, silent=True) or {}
+    tags = d.get("tags") or []
+    ok, result = services_mod.set_custom_tags(service_id, tags)
+    if not ok:
+        return jsonify({"ok": False, "error": result}), 400
+    return jsonify({"ok": True, "tags": result})
+
+
+@app.route("/api/services/export")
+@requires_admin
+@audit_action("services_export_config")
+def api_services_export():
+    """Скачать zip всех compose.yml + manifest + README с инструкцией восстановления."""
+    data = services_mod.export_config_zip()
+    fname = f"smartcomm-services-{int(time.time())}.zip"
+    return Response(data, mimetype="application/zip", headers={
+        "Content-Disposition": f'attachment; filename="{fname}"',
+        "Content-Length": str(len(data)),
+    })
 
 
 @app.route("/api/services/bulk-action", methods=["POST"])

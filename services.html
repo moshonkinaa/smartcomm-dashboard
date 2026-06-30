@@ -123,6 +123,15 @@
   .badge.stat-badge.warn   { color: var(--warn); border-color: rgba(239,159,39,0.35); background: rgba(239,159,39,0.1); }
   .badge.stat-badge.err    { color: var(--err); border-color: rgba(226,75,74,0.35); background: rgba(226,75,74,0.1); }
 
+  /* v3.0: Custom tags + Changelog releases */
+  .badge.custom-tag { background: rgba(127,119,221,0.13); color: var(--purple); border-color: rgba(127,119,221,0.3); font-size: 10.5px; }
+  .release-card { background: var(--bg-inner); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
+  .release-card summary { cursor: pointer; padding: 4px 0; font-size: 13px; user-select: none; }
+  .release-card summary strong { color: var(--accent); }
+  .release-card[open] summary { border-bottom: 1px solid var(--border); margin-bottom: 8px; padding-bottom: 6px; }
+  .release-body { font-size: 12px; line-height: 1.5; color: var(--text); max-height: 280px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
+  .release-body code { background: var(--bg); padding: 1px 4px; border-radius: 3px; font-family: var(--mono); font-size: 11px; }
+
   /* v2.6: Network info card */
   .net-info-grid { display: flex; flex-direction: column; gap: 12px; font-size: 12px; }
   .net-label { font-size: 11px; color: var(--text-muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.3px; }
@@ -185,6 +194,10 @@
     <button class="btn-action c-mute" onclick="location.href='/'">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>
       На дашборд
+    </button>
+    <button class="btn-action c-mute" onclick="exportConfig()" title="Скачать ZIP всех compose.yml + manifest.json — для бэкапа конфигурации">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Экспорт config
     </button>
     <button class="btn-action c-mute" id="btn-refresh" onclick="refreshCatalog()" title="git pull каталога с GitHub">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>
@@ -437,6 +450,12 @@ function cardHtml(s) {
     if (inst.restart_count > 0) {
       extraBadges += `<span class="badge stat-badge" title="кол-во рестартов">↻ ${inst.restart_count}</span>`;
     }
+    // v3.0: кастомные теги (если есть)
+    if (inst.custom_tags && inst.custom_tags.length) {
+      extraBadges += inst.custom_tags.slice(0, 3).map(t =>
+        `<span class="badge custom-tag" title="кастомный тег">🏷 ${escapeHtml(t)}</span>`
+      ).join('');
+    }
   }
 
   return `
@@ -537,6 +556,8 @@ async function openServiceModal(id) {
     ${svc._installed ? `
     <div class="modal-section">
       <h3>Настройки</h3>
+      <label style="display:block;margin-bottom:4px;font-size:12px;color:var(--text-muted)">🏷 Теги (для категоризации: production, testing, client-X…)</label>
+      <input type="text" id="svc-tags" class="search" style="width:100%;font-family:inherit;margin-bottom:10px" placeholder="теги через запятую, max 10" value="${escapeHtml((svc._installed.custom_tags || []).join(', '))}">
       <label style="display:block;margin-bottom:4px;font-size:12px;color:var(--text-muted)">📝 Заметки (для админа — клиент, оплата, контакты)</label>
       <textarea id="svc-notes" class="search" style="width:100%;min-height:60px;font-family:inherit;resize:vertical;margin-bottom:10px" placeholder="Например: «Установлено для клиента ИП Иванов, оплачено до 15.11.2026»">${escapeHtml(svc._installed.notes || '')}</textarea>
       <label style="display:block;margin-bottom:4px;font-size:12px;color:var(--text-muted)">🔄 Автообновление образов (docker pull новой версии)</label>
@@ -762,16 +783,95 @@ function renderInstalledActions(svc) {
 }
 
 async function updateService(id) {
-  if (!confirm('Обновить образ сервиса до latest? Контейнер будет пересоздан, сервис недоступен 10-60 сек.')) return;
+  // v3.0: сначала показываем changelog preview (если есть image_origin.github)
+  // → пользователь решает обновляться ли. Если changelog недоступен — обычный confirm.
+  const ok = await showChangelogPreview(id);
+  if (!ok) return;
   try {
     const r = await fetch('/api/services/' + encodeURIComponent(id) + '/update', { method: 'POST' });
     if (!r.ok) { showToast('HTTP ' + r.status, true); return; }
     const j = await r.json();
     if (!j.ok) { showToast('Не удалось: ' + (j.message || j.error), true); return; }
     showToast('Обновление запущено');
-    showProgressUI(id, 'install');   // используем тот же progress UI
+    showProgressUI(id, 'install');
   } catch (e) {
     showToast('Сетевая ошибка: ' + e.message, true);
+  }
+}
+
+async function showChangelogPreview(id) {
+  // Возвращает true если пользователь подтвердил update, false — отменил.
+  // Если changelog недоступен — fallback на обычный confirm.
+  try {
+    const r = await fetch('/api/services/' + encodeURIComponent(id) + '/changelog');
+    if (!r.ok || r.status === 404) {
+      return confirm('Обновить образ сервиса до latest? Контейнер будет пересоздан, сервис недоступен 10-60 сек.');
+    }
+    const j = await r.json();
+    if (!j.ok || !j.releases || !j.releases.length) {
+      return confirm('Обновить образ сервиса до latest? Контейнер будет пересоздан, сервис недоступен 10-60 сек.');
+    }
+    // Показываем модалку с последними 5 релизами
+    return await new Promise((resolve) => {
+      const body = document.getElementById('svc-modal-body');
+      const releasesHtml = j.releases.map((rel, i) => {
+        const date = rel.published_at ? new Date(rel.published_at).toLocaleDateString('ru-RU') : '—';
+        const body_html = (rel.body || '_(без описания)_')
+          .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+          .replace(/\n/g, '<br>');
+        return `<details ${i === 0 ? 'open' : ''} class="release-card">
+          <summary>
+            <strong>${escapeHtml(rel.tag || rel.name)}</strong>
+            ${rel.prerelease ? '<span class="badge" style="background:rgba(239,159,39,0.2);color:var(--warn);font-size:10px;padding:1px 6px">pre-release</span>' : ''}
+            <span class="text-dim" style="float:right;font-size:11px">${date}</span>
+          </summary>
+          <div class="release-body">${body_html}</div>
+          ${rel.url ? `<a href="${escapeHtml(rel.url)}" target="_blank" rel="noopener" class="text-muted" style="font-size:11px">↗ открыть на GitHub</a>` : ''}
+        </details>`;
+      }).join('');
+      body.innerHTML = `
+        <div class="modal-head">
+          <div class="modal-icon">⬆</div>
+          <div style="flex:1">
+            <h2 class="modal-title">Обновление до latest — что нового?</h2>
+            <p class="modal-tag">последние 5 релизов upstream проекта</p>
+          </div>
+        </div>
+        <div class="modal-section">
+          ${releasesHtml}
+        </div>
+        <div class="modal-section text-muted fs-sm" style="padding:10px;background:rgba(239,159,39,0.08);border:1px solid rgba(239,159,39,0.25);border-radius:6px">
+          ⚠ Контейнер будет пересоздан (docker compose pull + up -d). Сервис недоступен 10-60 сек.
+          Данные сохраняются (volumes не трогаются).
+        </div>
+        <div class="modal-actions">
+          <button class="btn-close" onclick="window._changelogResolve(false);openServiceModal('${escapeHtml(id)}')">Отмена</button>
+          <button class="btn-action c-blue" onclick="window._changelogResolve(true)">⬆ Обновить</button>
+        </div>`;
+      window._changelogResolve = (ok) => {
+        delete window._changelogResolve;
+        resolve(ok);
+      };
+    });
+  } catch (e) {
+    return confirm('Обновить образ сервиса? (changelog недоступен: ' + e.message + ')');
+  }
+}
+
+async function exportConfig() {
+  showToast('Готовлю архив…');
+  try {
+    // Используем link с window.location чтобы браузер обработал Content-Disposition
+    // и сохранил файл с правильным именем. Если backend вернёт 401 — fallback toast.
+    const a = document.createElement('a');
+    a.href = '/api/services/export';
+    a.download = '';   // используем filename из Content-Disposition
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => showToast('Скачивание запущено — см. папку Загрузки'), 600);
+  } catch (e) {
+    showToast('Ошибка экспорта: ' + e.message, true);
   }
 }
 
@@ -838,7 +938,20 @@ async function serviceAction(id, action, btn) {
 async function saveServiceSettings(id) {
   const notes = document.getElementById('svc-notes').value;
   const autoUpdate = document.getElementById('svc-auto-update').value;
+  const tagsRaw = document.getElementById('svc-tags')?.value || '';
+  const tags = tagsRaw.split(',').map(t => t.trim()).filter(t => t).slice(0, 10);
+
+  // Сохраняем notes/auto-update + tags параллельно — два запроса
   try {
+    const tagsReq = fetch('/api/services/' + encodeURIComponent(id) + '/tags', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({tags})
+    }).then(r => r.json()).catch(e => ({ok: false, error: e.message}));
+    const tagsRes = await tagsReq;
+    if (!tagsRes.ok) {
+      showToast('Теги: ' + (tagsRes.error || 'не сохранены'), true);
+    }
     const r = await fetch('/api/services/' + encodeURIComponent(id) + '/settings', {
       method: 'PATCH',
       headers: {'Content-Type': 'application/json'},

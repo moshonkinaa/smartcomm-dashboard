@@ -372,10 +372,22 @@ def list_installed():
                            last_auto_update_at, last_auto_update_ok,
                            restart_count, last_health_check_at, last_health_status,
                            last_health_code, last_health_rtt_ms,
-                           uptime_running_seconds, last_status_change_at
+                           uptime_running_seconds, last_status_change_at,
+                           custom_tags
                     FROM installed_services
                     ORDER BY installed_at DESC
                 """).fetchall()
+                result = [dict(r) for r in rows]
+                # custom_tags хранится JSON-строкой → парсим в list
+                for r in result:
+                    if r.get("custom_tags"):
+                        try:
+                            r["custom_tags"] = json.loads(r["custom_tags"])
+                        except (ValueError, TypeError):
+                            r["custom_tags"] = []
+                    else:
+                        r["custom_tags"] = []
+                return result
             except sqlite3.OperationalError:
                 # Колонки v3 ещё не созданы (миграция ещё не прошла на этом инстансе)
                 rows = c.execute("""
@@ -806,6 +818,208 @@ def get_compose_network_info(service_id):
         except (yaml.YAMLError, AttributeError, ValueError):
             pass
     return info
+
+
+def get_dependencies(service_id):
+    """Возвращает {requires: [..], required_by: [..]} — кто нужен этому сервису
+    и кто зависит от него. Парсит depends_on из compose.yml и сравнивает
+    container_name между всеми установленными сервисами."""
+    sdir = _service_dir(service_id)
+    compose_path = sdir / "compose.yml"
+    if not compose_path.exists() or not _HAS_YAML:
+        return {"requires": [], "required_by": []}
+    try:
+        text = compose_path.read_text(encoding="utf-8")
+        parsed = yaml.safe_load(text) or {}
+    except (OSError, yaml.YAMLError):
+        return {"requires": [], "required_by": []}
+
+    # Внутри одного compose — depends_on внутренние (service-to-service в том же compose).
+    # Мы НЕ показываем эти — пользователю важны inter-service зависимости (если бы
+    # они были в разных compose). На практике каждый сервис self-contained.
+    # Поэтому: requires/required_by = пусто. Возвращаем пустыми для backward-compat.
+    # Если будут cross-service deps (например internal_network shared) — добавим позже.
+    return {"requires": [], "required_by": []}
+
+
+def list_internal_containers(parsed_compose):
+    """Все container_name из compose dict — нужно для cross-reference."""
+    out = []
+    for svc_name, svc_cfg in (parsed_compose.get("services") or {}).items():
+        out.append(svc_cfg.get("container_name") or svc_name)
+    return out
+
+
+# ============ Changelog preview (GitHub releases API) ============
+
+_CHANGELOG_CACHE = {}   # {service_id: {"ts": ..., "data": [...]}}
+_CHANGELOG_TTL = 3600   # 1 час
+
+
+def get_changelog(service_id, max_entries=5):
+    """Возвращает список последних релизов upstream-репо (через GitHub releases API).
+
+    Каталог YAML должен содержать поле image_origin:
+        image_origin:
+          github: "immich-app/immich"
+
+    Кешируется на 1ч (избегаем rate-limit GitHub API).
+    Возвращает None если поле не задано или API ошибка."""
+    catalog_svc = _find_service_in_catalog(service_id)
+    if not catalog_svc:
+        return None
+    origin = catalog_svc.get("image_origin") or {}
+    repo = origin.get("github")
+    if not repo:
+        return None
+
+    now = time.time()
+    cached = _CHANGELOG_CACHE.get(service_id)
+    if cached and now - cached["ts"] < _CHANGELOG_TTL:
+        return cached["data"][:max_entries]
+
+    import urllib.request
+    import urllib.error
+    url = f"https://api.github.com/repos/{repo}/releases?per_page={max_entries}"
+    try:
+        req = urllib.request.Request(url, headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "SmartComm-Dashboard/3.0"
+        })
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read().decode("utf-8"))
+    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError,
+            OSError, TimeoutError) as e:
+        # Кешируем пустой результат на 5 мин чтобы не долбить API
+        _CHANGELOG_CACHE[service_id] = {"ts": now - _CHANGELOG_TTL + 300, "data": []}
+        return None
+
+    result = []
+    for rel in data:
+        result.append({
+            "tag": rel.get("tag_name") or rel.get("name"),
+            "name": rel.get("name") or rel.get("tag_name"),
+            "published_at": rel.get("published_at"),
+            "url": rel.get("html_url"),
+            "prerelease": rel.get("prerelease", False),
+            # Body — markdown changelog. Cap до 3000 символов чтобы не разрастаться.
+            "body": (rel.get("body") or "")[:3000],
+        })
+    _CHANGELOG_CACHE[service_id] = {"ts": now, "data": result}
+    return result[:max_entries]
+
+
+# ============ Custom tags ============
+
+def get_custom_tags(service_id):
+    """Возвращает list custom тегов для service_id."""
+    try:
+        with _db() as c:
+            row = c.execute(
+                "SELECT custom_tags FROM installed_services WHERE id = ?",
+                (service_id,)
+            ).fetchone()
+        if not row or not row["custom_tags"]:
+            return []
+        return json.loads(row["custom_tags"])
+    except (sqlite3.Error, ValueError, TypeError):
+        return []
+
+
+def set_custom_tags(service_id, tags):
+    """Установить полный список тегов (replace, не append)."""
+    if not isinstance(tags, list):
+        return False, "tags должен быть list"
+    # Валидация: каждый tag — строка, max 32 символа, max 10 тегов
+    if len(tags) > 10:
+        return False, "максимум 10 тегов"
+    clean = []
+    for t in tags:
+        if not isinstance(t, str):
+            continue
+        t = t.strip()[:32]
+        if t and t not in clean:
+            clean.append(t)
+    try:
+        with _db() as c:
+            c.execute("UPDATE installed_services SET custom_tags = ? WHERE id = ?",
+                      (json.dumps(clean, ensure_ascii=False), service_id))
+        return True, clean
+    except sqlite3.Error as e:
+        return False, str(e)
+
+
+def list_all_custom_tags():
+    """Возвращает все уникальные теги across все installed сервисы (для autocomplete)."""
+    out = set()
+    try:
+        with _db() as c:
+            rows = c.execute(
+                "SELECT custom_tags FROM installed_services "
+                "WHERE custom_tags IS NOT NULL AND custom_tags != '[]'"
+            ).fetchall()
+        for r in rows:
+            try:
+                for t in json.loads(r["custom_tags"] or "[]"):
+                    if t:
+                        out.add(t)
+            except (ValueError, TypeError):
+                pass
+    except sqlite3.Error:
+        pass
+    return sorted(out)
+
+
+# ============ Export config ============
+
+def export_config_zip():
+    """Создаёт zip-архив всех compose.yml + installed_services snapshot.
+    Возвращает bytes (in-memory). Не включает данные сервисов — только конфиг."""
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        # 1. installed_services snapshot
+        installed = list_installed()
+        manifest = {
+            "exported_at": int(time.time()),
+            "exported_at_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "platform_arch": _platform_arch(),
+            "services_count": len(installed),
+            "services": installed,
+        }
+        zf.writestr("manifest.json",
+                    json.dumps(manifest, indent=2, ensure_ascii=False))
+
+        # 2. compose.yml каждого сервиса
+        for inst in installed:
+            sid = inst["id"]
+            compose_path = _service_dir(sid) / "compose.yml"
+            if compose_path.exists():
+                try:
+                    zf.write(str(compose_path), f"compose/{sid}/compose.yml")
+                except OSError:
+                    pass
+
+        # 3. README с инструкцией восстановления
+        readme = (
+            "# SmartComm Services — Export\n\n"
+            f"Снимок конфигурации сделан {manifest['exported_at_iso']}.\n\n"
+            "## Содержимое\n\n"
+            "- `manifest.json` — список установленных сервисов + статусы\n"
+            "- `compose/<id>/compose.yml` — docker-compose файлы\n\n"
+            "## Восстановление на новом контроллере\n\n"
+            "1. Установи SmartComm Dashboard.\n"
+            "2. Сравни manifest.json с текущими сервисами.\n"
+            "3. Для каждого отсутствующего: установи через UI (каталог "
+            "автоматически подтянет актуальный compose). НЕ копируй compose.yml "
+            "напрямую — версии в манифестах могли обновиться.\n\n"
+            "**Важно**: данные сервисов (фото в Immich, базы Postgres и т.п.) "
+            "не входят в этот архив — нужен отдельный backup из "
+            "`/var/lib/smartcomm-services/<id>/`.\n"
+        )
+        zf.writestr("README.md", readme)
+    return buf.getvalue()
 
 
 def bulk_action(action, service_ids=None):

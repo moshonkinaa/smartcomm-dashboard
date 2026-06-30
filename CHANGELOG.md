@@ -2,6 +2,37 @@
 
 Все значимые изменения проекта. Формат — Keep a Changelog + SemVer.
 
+## 3.0.0 — 2026-06-30
+
+**Magic milestone** — magazine с услугами достигает feature-parity с Portainer/CasaOS по диагностике + добавляет changelog preview и export. Это финальный релиз серии 2.x → 3.0.
+
+### Added — Changelog preview перед update
+- **`/api/services/<id>/changelog`** — последние 5 релизов upstream-проекта через GitHub Releases API. Кеш 1ч.
+- **Catalog YAML**: новое поле `image_origin: { github: "owner/repo" }`. Заполнено для 11 сервисов (immich, jellyfin, nextcloud, n8n, adguardhome, vaultwarden, uptime-kuma, ollama, frigate, wg-easy, 3x-ui).
+- **Frontend**: при клике «⬆ Обновить» появляется модалка с release notes (collapsible `<details>`, первый release раскрыт), pre-release badge, ссылка на GitHub. Только потом — confirm на update. Если changelog недоступен → обычный confirm.
+
+### Added — Custom tags
+- **Schema migration v4**: новая колонка `custom_tags TEXT DEFAULT '[]'` в installed_services.
+- **`GET/PUT /api/services/<id>/tags`** — CRUD тегов (max 10 тегов, до 32 символов каждый).
+- **Frontend**: поле «🏷 Теги» в настройках сервиса (production, testing, client-X…). Tag chips отображаются на карточке (max 3, фиолетовый цвет). Сохраняются вместе с notes/auto-update одним нажатием.
+
+### Added — Export config
+- **`GET /api/services/export`** — генерирует ZIP-архив в памяти: `manifest.json` (snapshot всех installed_services), `compose/<id>/compose.yml` (все docker-compose файлы), `README.md` с инструкцией восстановления.
+- **Frontend**: кнопка «⬇ Экспорт config» в шапке. Через `<a download>` браузер сохраняет файл с именем `smartcomm-services-<timestamp>.zip`.
+- ❗ Архив НЕ содержит данных сервисов (фото, базы данных) — только конфиги. Полный backup требует отдельной выгрузки `/var/lib/smartcomm-services/`.
+
+### Dependencies (заложено для будущего)
+- **`get_dependencies(service_id)`** — backend helper для cross-service deps. В текущей версии всегда возвращает `{requires: [], required_by: []}` (каждый сервис self-contained). Заложено на будущее когда появятся shared-postgres / shared-redis между сервисами.
+
+### Audit
+- `service_tags_update` — логирование изменения тегов с details `{tags: [...]}`.
+- `services_export_config` — кто скачивал бэкап конфигурации.
+
+### Catalog
+- 11 манифестов получили `image_origin.github` поле → changelog preview работает out-of-the-box для всех популярных сервисов.
+
+---
+
 ## 2.6.0 — 2026-06-30
 
 **Services: live diagnostics + bulk operations + network introspection.**
