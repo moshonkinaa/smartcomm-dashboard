@@ -104,8 +104,8 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "2.2.1"
-RELEASE_DATE = "2026-06-27"
+VERSION = "2.3.0"
+RELEASE_DATE = "2026-06-30"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # Минимальная версия клиента (PWA/cache) с которой backend ещё совместим.
 # Если HTML/JS клиента старше — попросим hard refresh. Обычно = текущая VERSION,
@@ -1270,6 +1270,87 @@ def _decode_mmc_date(raw):
     return raw
 
 
+def smart_disk_health():
+    """SMART для SATA/NVMe дисков (x86 неттопы — Cubi и т.п.).
+    Возвращает dict или None если smartctl не установлен / диск не SATA/NVMe.
+
+    Используем `smartctl --json` чтобы получить структурированный output."""
+    dev = root_block_device()
+    if not dev:
+        return None
+    if "mmcblk" in dev:
+        return None   # SD-карта → отдельная функция sdcard_health()
+    if not shutil.which("smartctl"):
+        return None
+
+    try:
+        out = sh(
+            f"sudo smartctl --json --info --health --attributes {dev} 2>/dev/null",
+            timeout=8
+        )
+        if not out:
+            return None
+        data = json.loads(out)
+    except (json.JSONDecodeError, subprocess.TimeoutExpired):
+        return None
+
+    info = {
+        "device": dev,
+        "card_type": "SSD" if data.get("rotation_rate", 1) == 0 else "HDD",
+        "model": data.get("model_name") or data.get("model_family", "?"),
+        "serial": data.get("serial_number"),
+        "firmware": data.get("firmware_version"),
+    }
+
+    # Размер в GB
+    cap_bytes = (data.get("user_capacity") or {}).get("bytes") or 0
+    if cap_bytes:
+        info["size_h"] = f"{cap_bytes // (1024**3)} GB"
+
+    # SMART overall health (PASSED/FAILED)
+    info["smart_passed"] = (data.get("smart_status") or {}).get("passed")
+
+    # Температура
+    temp = (data.get("temperature") or {}).get("current")
+    if temp:
+        info["temp_c"] = temp
+
+    # Power-on hours
+    poh = (data.get("power_on_time") or {}).get("hours")
+    if poh is not None:
+        info["power_on_hours"] = poh
+        info["power_on_years"] = round(poh / 8760, 1)   # 24×365
+
+    # Атрибуты SMART (для SATA) или NVMe-specific
+    for attr in ((data.get("ata_smart_attributes") or {}).get("table") or []):
+        name = attr.get("name", "")
+        raw = (attr.get("raw") or {}).get("value")
+        norm = attr.get("value")
+        if name == "Reallocated_Sector_Ct":
+            info["reallocated_sectors"] = raw
+        elif name in ("Wear_Leveling_Count", "SSD_Life_Left", "Percent_Lifetime_Remain"):
+            # Normalized value = remaining life % (для большинства SSD)
+            if norm is not None:
+                info["lifespan_pct"] = norm
+        elif name == "Power_Cycle_Count":
+            info["power_cycles"] = raw
+        elif name in ("Total_LBAs_Written", "Total_Host_Writes"):
+            # Конвертируем LBA → TB (1 LBA = 512 байт)
+            if raw:
+                info["written_tb"] = round(raw * 512 / (1024 ** 4), 2)
+
+    # NVMe-specific
+    nvme = data.get("nvme_smart_health_information_log") or {}
+    if nvme:
+        if "percentage_used" in nvme:
+            info["lifespan_pct"] = max(0, 100 - nvme["percentage_used"])
+        if "data_units_written" in nvme:
+            # NVMe data units = 512 KB (1000 sectors of 512 bytes)
+            info["written_tb"] = round(nvme["data_units_written"] * 512 * 1000 / (1024 ** 4), 2)
+
+    return info
+
+
 def sdcard_health():
     """eMMC has real SMART via extcsd; plain SD cards do not (hardware
     limitation). We detect type and return what's actually readable."""
@@ -1362,7 +1443,10 @@ def health_summary():
         "updates": _updates_snapshot(),
         "dmesg_errors": dmesg_errors(5),
         "dmesg_firmware_noise": dmesg_firmware_noise_count(),
+        # Pi → sdcard (mmc extcsd / SD info), x86 → smart (smartctl JSON).
+        # Frontend показывает одну плитку «Накопитель», содержимое разное.
         "sdcard": sdcard_health(),
+        "smart": smart_disk_health(),
     }
     with _HEALTH_LOCK:
         _HEALTH["ts"] = now

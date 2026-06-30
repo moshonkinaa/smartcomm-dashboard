@@ -2,6 +2,28 @@
 
 Все значимые изменения проекта. Формат — Keep a Changelog + SemVer.
 
+## 2.3.0 — 2026-06-30
+
+**SMART-мониторинг диска + hardware watchdog ready** — повышение надёжности после silent freeze на Cubi 2026-06-30 07:05.
+
+### Added
+- **Плитка «Накопитель» в «Состояние системы»** с поддержкой SMART для SATA/NVMe (x86 платформы). На Pi показывает SD-карту / eMMC как раньше; на Cubi и других x86 — модель диска, статус SMART (PASSED/FAILED), температура, % оставшегося ресурса (lifespan), bad sectors, годы работы, объём записанного. Цвет: 🟢 ok / 🟡 warn (< 20% жизни или bad sectors > 0) / 🔴 err (SMART failed).
+- **install.sh: добавлен smartmontools** в REQUIRED apt-пакеты — `smartctl` теперь доступен для бэкенда сразу после установки.
+
+### Backend
+- Новая функция `smart_disk_health()` в `dashboard.py` — парсит `smartctl --json` для root-диска (только SATA/NVMe, mmcblk обрабатывает `sdcard_health()`). Возвращает model, smart_passed, temp_c, lifespan_pct, reallocated_sectors, power_on_years, written_tb.
+- `/api/status` теперь возвращает оба поля: `sdcard` (Pi) и `smart` (x86), фронтенд показывает то что доступно.
+
+### Operational notes (не код, что сделано в инфре)
+- **Hardware watchdog (iTCO_wdt) включён на Cubi** через systemd (`RuntimeWatchdogSec=30s`). Защита от silent freeze: если ядро зависнет на 30+ сек → железо принудительно перезагружает CPU. Identity = `iTCO_wdt`, timeout = 30s, state = active.
+- **MikroTik netwatch для Cubi (101.12)**: автоматический мониторинг с интервалом 1 мин, лог UP/DOWN в RouterOS journal.
+- **Catalog v0.8.0**: добавлены `mem_limit` для immich (4g/3g/256m/1g), ollama (8g/1.5g), frigate (4g). Защита от runaway containers. Применятся через manual Update в дашборде.
+
+### Context (что произошло)
+Cubi умер silent freeze в 07:05:49 (после 7ч аптайма с установленными 12 сервисами), пролежал 2.5 часа до ручного включения. В журналах нет panic/OOM/thermal — kernel так глубоко завис что не успел залогировать. Watchdog + netwatch резко сократят downtime будущих случаев.
+
+---
+
 ## 2.2.1 — 2026-06-30
 
 **Hotfix v2.2.0** — pre-create volume target dirs перед `docker compose up -d`.

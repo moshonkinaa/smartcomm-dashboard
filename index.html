@@ -1173,9 +1173,27 @@ function renderHealth(h, throttle) {
     items.push(healthRow('warn', 'dmesg: ' + h.dmesg_errors.length + ' ошибок', 'см. ниже'));
   }
 
+  // Накопитель — на Pi показывает SD-card / eMMC, на x86 (Cubi) — SMART для SATA/NVMe
+  const smart = h.smart;
   const sd = h.sdcard;
-  if (!sd) {
-    items.push(healthRow('ok', 'SD card', 'не обнаружена'));
+  if (smart) {
+    // SATA/NVMe диск (Cubi). Цвет: ok если SMART passed, errr если failed
+    let cls = smart.smart_passed === false ? 'err' : 'ok';
+    if (smart.lifespan_pct != null && smart.lifespan_pct < 20) cls = 'warn';
+    if (smart.reallocated_sectors && smart.reallocated_sectors > 0) cls = 'warn';
+    const parts = [];
+    parts.push((smart.card_type || 'SSD') + (smart.size_h ? ' ' + smart.size_h : ''));
+    if (smart.smart_passed === true) parts.push('SMART ✓');
+    if (smart.smart_passed === false) parts.push('SMART ⚠');
+    if (smart.temp_c != null) parts.push(smart.temp_c + '°C');
+    if (smart.lifespan_pct != null) parts.push(smart.lifespan_pct + '% жизни');
+    if (smart.power_on_years) parts.push(smart.power_on_years + ' лет работы');
+    if (smart.written_tb) parts.push(smart.written_tb + ' TB записано');
+    if (smart.reallocated_sectors > 0) parts.push(smart.reallocated_sectors + ' bad sectors');
+    const title = smart.model ? smart.model.substring(0, 30) : 'Накопитель';
+    items.push(healthRow(cls, title, parts.join(' · ')));
+  } else if (!sd) {
+    items.push(healthRow('ok', 'Накопитель', 'не обнаружен'));
   } else if (sd.card_type === 'MMC' && sd.life_a_pct_max != null) {
     // eMMC with SMART available
     let cls = 'ok';
