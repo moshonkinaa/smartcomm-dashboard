@@ -1219,6 +1219,23 @@ def _do_install_worker(manifest):
         compose_path.write_text(compose_text, encoding="utf-8")
         _progress_set(sid, log_line=f"  compose.yml: {len(compose_text)} bytes")
 
+        # 2a. Pre-create volume target dirs ОТ service-user'а — иначе
+        # docker-compose создаст их как root, и контейнеры запускающиеся
+        # от non-root users (n8n=node:1000, immich=...) не смогут писать.
+        try:
+            if _HAS_YAML:
+                parsed = yaml.safe_load(compose_text) or {}
+                for svc_cfg in (parsed.get("services") or {}).values():
+                    for vol in svc_cfg.get("volumes", []) or []:
+                        if isinstance(vol, str) and ":" in vol and not vol.startswith("/var/run/"):
+                            host_path = vol.split(":")[0].strip()
+                            # Только bind mounts внутри нашего service dir
+                            if host_path.startswith(str(sdir)):
+                                Path(host_path).mkdir(parents=True, exist_ok=True)
+                                _progress_set(sid, log_line=f"    pre-created volume: {host_path}")
+        except (yaml.YAMLError, OSError) as e:
+            _progress_set(sid, log_line=f"    warn: pre-create volumes failed: {e}")
+
         # 3. docker compose pull
         _progress_set(sid, phase="pulling",
                       log_line="=== docker compose pull ===")

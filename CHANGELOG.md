@@ -2,6 +2,22 @@
 
 Все значимые изменения проекта. Формат — Keep a Changelog + SemVer.
 
+## 2.2.1 — 2026-06-30
+
+**Hotfix v2.2.0** — pre-create volume target dirs перед `docker compose up -d`.
+
+### Fixed
+- **n8n crash loop** «EACCES: permission denied, open '/home/node/.n8n/config'» — корень: docker-compose сам создавал volume bind-mount target dirs от root, контейнер от node user (UID 1000) не мог писать. Теперь `_install_worker` парсит YAML compose.yml и **pre-creates все volume dirs от service-user'а** (cubi/pi, UID 1000) до запуска compose up. Любой контейнер с user UID 1000 (n8n, immich-server, и др.) теперь пишет без проблем.
+
+### Caveats
+- Только bind mounts с путём начинающимся на `{DATA}/...` (= `/var/lib/smartcomm-services/<id>/`) pre-create'нятся. Named volumes (Docker-managed) не трогаем — docker сам с ними справляется.
+
+### Дополнительно (в каталоге, не в дашборде)
+- AdGuard манифест: убрали публикацию `:443` (был conflict с 3X-UI Reality VPN)
+- Nextcloud AIO: master container `:8080` → `:8800` (был conflict с SmartComm Dashboard :8080)
+- Ollama OpenWebUI: `:3000` → `:3030` (был conflict с AdGuard initial setup :3000)
+- **AmneziaWG → wg-easy** (классический WireGuard) — `docker.amnezia.org` DNS не работает, image не качается. Wg-easy с web UI на Docker Hub, для DPI-обхода РКН остаётся 3X-UI Reality
+
 ## 2.2.0 — 2026-06-30
 
 **Auto-update сервисов магазина** — закрытие оставшейся фичи v2.0.0 (тогда было только UI-настройка never/weekly/monthly без реальной логики).
