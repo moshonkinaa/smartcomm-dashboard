@@ -2,6 +2,29 @@
 
 Все значимые изменения проекта. Формат — Keep a Changelog + SemVer.
 
+## 2.3.2 — 2026-06-30
+
+**Critical fix** — дашборд не auto-started при boot на Pi из-за systemd ordering cycle.
+
+### Fixed
+- **systemd ordering cycle с argononed.service** → systemd удалял job старта `smartcomm-dashboard.service` при boot. Цикл: `multi-user.target` wants дашборд → дашборд `After=argononed.service` → argononed `After=multi-user.target`. На Cubi проблемы не было (нет argononed). Убрал `argononed.service` из `After=` шаблона.
+- **`Restart=on-failure` → `Restart=always`** — теперь systemd рестартит дашборд даже при clean exit (раньше игнорировал exit code 0).
+
+### Added
+- **Persistent journal** на Pi (`/var/log/journal`) — журнал переживает reboot, можно разбирать silent freeze post-mortem.
+- **Hardware watchdog на Pi** (BCM2835 timer, `RuntimeWatchdogSec=30s`) — auto-reboot за 30с при kernel freeze.
+- **dmesg noise filter**: добавлены 2 безобидные ошибки Pi
+  - `brcm-pcie 1000110000.pcie: link down` — PCIe слот пустой (нет NVMe), нормально
+  - `brcmf_cfg80211_reg_notifier: Firmware rejected country setting` — WiFi unused (только Ethernet)
+
+### Operational (на устройствах, не код)
+- Отключён `smartmontools.service` на Pi — был `failed` (на SD-карте нет SMART). На Cubi (с SATA SSD) — оставлен включённым.
+
+### Context
+Pi сам перезагрузился 2026-06-30 10:15 (после 6 дней uptime). После reboot дашборд не запустился. Причина reboot — НЕИЗВЕСТНА (journal был volatile, логи потеряны). Теперь journal persistent + watchdog + ordering cycle fix → следующая perturbation будет полностью диагностируема.
+
+---
+
 ## 2.3.1 — 2026-06-30
 
 **UI fix** — Pi-specific формулировки в подтверждениях/уведомлениях убраны.

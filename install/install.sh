@@ -189,11 +189,14 @@ fi
 echo ""
 echo "[7/7] Systemd unit + старт"
 cp "$SRC_DIR/$SVC_FILE" "/etc/systemd/system/$SVC_FILE"
-# Если хочешь другого юзера, заменяем User=/Group= в unit'е
-if [ "$SVC_USER" != "pi" ]; then
-  sed -i "s/^User=pi$/User=$SVC_USER/" "/etc/systemd/system/$SVC_FILE"
-  sed -i "s/^Group=pi$/Group=$SVC_GROUP/" "/etc/systemd/system/$SVC_FILE"
-fi
+# Шаблон содержит {SVC_USER} placeholder для User= и Group= —
+# заменяем на актуальное имя юзера/группы. Защита от случайного scp
+# шаблона напрямую (плейсхолдер unit'ом не парсится → unit fails to
+# start → видно сразу, а не "User=pi на Cubi" что молча ломается).
+sed -i "s/{SVC_USER}/$SVC_USER/g" "/etc/systemd/system/$SVC_FILE"
+# Backward-compat: если до этого был старый шаблон с User=pi (из старого install.sh)
+sed -i "s/^User=pi$/User=$SVC_USER/" "/etc/systemd/system/$SVC_FILE"
+sed -i "s/^Group=pi$/Group=$SVC_GROUP/" "/etc/systemd/system/$SVC_FILE"
 chmod 644 "/etc/systemd/system/$SVC_FILE"
 systemctl daemon-reload
 systemctl enable smartcomm-dashboard.service

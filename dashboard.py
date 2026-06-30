@@ -104,7 +104,7 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "2.3.1"
+VERSION = "2.3.2"
 RELEASE_DATE = "2026-06-30"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # Минимальная версия клиента (PWA/cache) с которой backend ещё совместим.
@@ -1213,6 +1213,11 @@ _DMESG_KNOWN_FIRMWARE_NOISE = (
     # Производная — отключение thermal zone когда _TMP не работает
     "Unable to get temperature, disabling",
     "Disabled thermal zone with critical trip point",
+    # Raspberry Pi 5: PCIe слот пуст (нет NVMe/расширения) — link down это норма
+    "brcm-pcie 1000110000.pcie: link down",
+    # Raspberry Pi: WiFi firmware отвергает country setting если используется
+    # только Ethernet — безобидно, WiFi всё равно работает по дефолту
+    "brcmf_cfg80211_reg_notifier: Firmware rejected country setting",
 )
 
 

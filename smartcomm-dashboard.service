@@ -1,15 +1,24 @@
 [Unit]
 Description=SmartComm Diagnostic Dashboard
-After=network-online.target irserver.service argononed.service
+# argononed.service НЕ перечисляем в After= — он имеет After=multi-user.target,
+# а у нас WantedBy=multi-user.target → возникает ordering cycle и systemd
+# удаляет наш job старта. Дашборд работает без argononed (это userspace daemon
+# для физической кнопки Argon-кейса, опциональный).
+After=network-online.target irserver.service
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=pi
-Group=pi
+# ВНИМАНИЕ: User/Group подставляет install.sh через sed по переменной SVC_USER.
+# Шаблон в репо имеет {SVC_USER} placeholder. Pi → User=pi, Cubi → User=cubi.
+# Никогда не копируй этот файл напрямую через scp — пройди через install.sh.
+User={SVC_USER}
+Group={SVC_USER}
 WorkingDirectory=/opt/smartcomm-dashboard
 ExecStart=/usr/bin/python3 /opt/smartcomm-dashboard/dashboard.py
-Restart=on-failure
+# Restart=always — рестартим и при clean exit (на случай если что-то тихо упало).
+# При on-failure systemd НЕ перезапускает unit если он exit code 0.
+Restart=always
 RestartSec=5
 StateDirectory=smartcomm-dashboard
 StandardOutput=journal
