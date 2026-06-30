@@ -683,6 +683,167 @@ def ensure_auto_updater_started():
                      name="services-auto-updater").start()
 
 
+def stream_logs(service_id, since="30m", level=None):
+    """Generator: streaming docker compose logs --follow. Используется SSE-endpoint'ом.
+
+    Args:
+      service_id: id сервиса
+      since: relative time (e.g. "30m", "1h") — берём только последние X строк через --since
+      level: фильтр по уровню логирования. None | 'error' | 'warn' | 'info'
+             (regex по line содержимому — docker logs не имеют structured уровней)
+
+    Yields: SSE-formatted строки `data: <line>\n\n`.
+
+    Завершается когда подписчик отключается (Flask Response closes) или процесс умирает."""
+    sdir = _service_dir(service_id)
+    compose_path = sdir / "compose.yml"
+    if not compose_path.exists():
+        yield f"event: error\ndata: compose.yml не найден\n\n"
+        return
+
+    # Регекс-фильтры для level. Docker logs не имеют structured уровней,
+    # поэтому ищем по содержимому каждой строки case-insensitive.
+    import re as _re
+    level_patterns = {
+        "error": _re.compile(r"\b(error|err|exception|traceback|fatal|panic|critical)\b",
+                             _re.IGNORECASE),
+        "warn":  _re.compile(r"\b(error|err|exception|traceback|fatal|panic|critical|warn|warning)\b",
+                             _re.IGNORECASE),
+        "info":  None,   # все строки
+    }
+    pattern = level_patterns.get(level) if level else None
+
+    cmd = ["sudo", "docker", "compose", "-f", str(compose_path),
+           "logs", "--follow", "--tail", "100", "--no-color",
+           "--since", since]
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True,
+                                bufsize=1)   # line-buffered
+    except (FileNotFoundError, OSError) as e:
+        yield f"event: error\ndata: spawn failed: {e}\n\n"
+        return
+
+    try:
+        # Keepalive каждые 15с (некоторые прокси/браузеры закрывают idle SSE)
+        last_send = time.time()
+        while True:
+            line = proc.stdout.readline()
+            now = time.time()
+            if not line:
+                if proc.poll() is not None:
+                    yield "event: end\ndata: process exited\n\n"
+                    break
+                if now - last_send > 15:
+                    yield ": keepalive\n\n"  # SSE comment, не data
+                    last_send = now
+                continue
+            line = line.rstrip("\n\r")
+            if not line:
+                continue
+            if pattern and not pattern.search(line):
+                continue
+            # SSE формат: data: <line>\n\n. Многострочные сообщения уже разбиты по \n.
+            # Экранируем только \n (внутри одной line не должно быть, но safety net).
+            safe = line.replace("\n", "\\n")
+            yield f"data: {safe}\n\n"
+            last_send = now
+    finally:
+        try:
+            proc.terminate()
+            proc.wait(timeout=3)
+        except (subprocess.TimeoutExpired, OSError):
+            try:
+                proc.kill()
+            except OSError:
+                pass
+
+
+def get_compose_network_info(service_id):
+    """Распарсить compose.yml + docker inspect — вернуть network info:
+    {ports: [...], internal_hostnames: [...], external_url: str|None}.
+    Используется в network info card модалки."""
+    sdir = _service_dir(service_id)
+    compose_path = sdir / "compose.yml"
+    if not compose_path.exists():
+        return None
+    try:
+        text = compose_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    info = {"ports": [], "internal_hostnames": [], "containers": []}
+    # Парсим ports из compose YAML — простой regex (не нужен полный YAML)
+    # Форматы: "80:80", "8080:80", "80:80/udp", "127.0.0.1:80:80"
+    if _HAS_YAML:
+        try:
+            parsed = yaml.safe_load(text) or {}
+            for svc_name, svc_cfg in (parsed.get("services") or {}).items():
+                cname = svc_cfg.get("container_name") or svc_name
+                info["containers"].append(cname)
+                # Internal hostname = service name в compose
+                info["internal_hostnames"].append(svc_name)
+                for p in svc_cfg.get("ports") or []:
+                    # p может быть строкой "host:container/proto" или dict
+                    if isinstance(p, str):
+                        parts = p.split(":")
+                        if len(parts) == 2:
+                            host_port, container_port = parts
+                            bind = "0.0.0.0"
+                        elif len(parts) == 3:
+                            bind, host_port, container_port = parts
+                        else:
+                            continue
+                        proto = "tcp"
+                        if "/" in container_port:
+                            container_port, proto = container_port.split("/", 1)
+                        info["ports"].append({
+                            "host_port": host_port,
+                            "container_port": container_port,
+                            "bind": bind,
+                            "proto": proto,
+                            "container": cname,
+                        })
+        except (yaml.YAMLError, AttributeError, ValueError):
+            pass
+    return info
+
+
+def bulk_action(action, service_ids=None):
+    """Запустить action для нескольких сервисов параллельно.
+
+    Args:
+      action: start | stop | restart
+      service_ids: None → все installed; список → только указанные.
+
+    Returns: dict {service_id: (ok, message)}"""
+    if action not in ("start", "stop", "restart"):
+        return {}
+    if service_ids is None:
+        service_ids = [s["id"] for s in list_installed()]
+    results = {}
+    threads = []
+    lock = threading.Lock()
+
+    def _worker(sid):
+        try:
+            ok, msg = service_action(sid, action)
+        except Exception as e:
+            ok, msg = False, str(e)
+        with lock:
+            results[sid] = (ok, msg)
+
+    for sid in service_ids:
+        t = threading.Thread(target=_worker, args=(sid,), daemon=True)
+        t.start()
+        threads.append(t)
+    # Ждём все потоки с общим timeout 90 сек (на случай stuck docker-compose)
+    deadline = time.time() + 90
+    for t in threads:
+        remaining = max(0, deadline - time.time())
+        t.join(timeout=remaining)
+    return results
+
+
 def service_action(service_id, action):
     """action: start | stop | restart | logs. Возвращает (ok, message_or_output)."""
     if action not in ("start", "stop", "restart", "logs"):

@@ -123,6 +123,14 @@
   .badge.stat-badge.warn   { color: var(--warn); border-color: rgba(239,159,39,0.35); background: rgba(239,159,39,0.1); }
   .badge.stat-badge.err    { color: var(--err); border-color: rgba(226,75,74,0.35); background: rgba(226,75,74,0.1); }
 
+  /* v2.6: Network info card */
+  .net-info-grid { display: flex; flex-direction: column; gap: 12px; font-size: 12px; }
+  .net-label { font-size: 11px; color: var(--text-muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.3px; }
+  .port-list { display: flex; flex-direction: column; gap: 4px; }
+  .port-row { display: flex; gap: 8px; align-items: center; padding: 4px 0; }
+  .port-pill { display: inline-block; padding: 2px 8px; font-family: var(--mono); font-size: 11px; background: var(--bg-inner); border: 1px solid var(--border); border-radius: 6px; color: var(--text); }
+  .port-pill strong { color: var(--accent); font-weight: 600; }
+
   /* v2.5: Chart canvas в модалке */
   .metrics-chart-wrap { position: relative; height: 220px; margin-top: 6px; padding: 8px; background: var(--bg-inner); border: 1px solid var(--border); border-radius: 8px; }
   .chart-range-tabs { display: flex; gap: 6px; margin-bottom: 4px; font-size: 11px; }
@@ -187,6 +195,15 @@
 
 <div class="summary" id="summary">
   <!-- заполняется JS -->
+</div>
+
+<!-- v2.6: Bulk actions toolbar (показывается только если установлено >= 2 сервиса) -->
+<div id="bulk-actions" style="display:none;background:var(--bg-card);border:1px solid var(--border);border-radius:9px;padding:8px 12px;margin-bottom:12px;font-size:12px;color:var(--text-muted);align-items:center;gap:8px;flex-wrap:wrap">
+  <span style="font-weight:500">⚡ Массовые действия:</span>
+  <button class="btn-action" onclick="bulkAction('restart')" style="padding:4px 10px;font-size:12px">↻ Перезапустить все</button>
+  <button class="btn-action c-amber" onclick="bulkAction('stop')" style="padding:4px 10px;font-size:12px">⏸ Остановить все</button>
+  <button class="btn-action c-green" onclick="bulkAction('start')" style="padding:4px 10px;font-size:12px">▶ Запустить все</button>
+  <span class="text-dim" style="font-size:11px;margin-left:auto">применяется ко всем установленным сервисам параллельно</span>
 </div>
 
 <!-- Пакеты «Базовый/Стандарт/Премиум» -->
@@ -300,6 +317,9 @@ function renderSummary() {
   const stopped = installed - running;
   const availToInstall = Math.max(0, compat - installed);
   const notSuitable = total - compat;
+  // v2.6: показать bulk-actions если установлено >= 2 сервиса
+  const bulkBar = document.getElementById('bulk-actions');
+  if (bulkBar) bulkBar.style.display = (installed >= 2) ? 'flex' : 'none';
   const installedClass = installed > 0 ? 'ok' : '';
   const html = `
     <div class="stat ${installedClass}">
@@ -492,6 +512,11 @@ async function openServiceModal(id) {
       <p class="fs-sm text-dim mt-2" style="margin-bottom:0">⚡ обновление каждые 30 сек · история ring-buffer 24ч (старее — downsample)</p>
     </div>` : ''}
     ${svc._installed ? `
+    <div class="modal-section" id="network-info-section">
+      <h3>Сеть</h3>
+      <div class="text-muted fs-sm">Загрузка…</div>
+    </div>` : ''}
+    ${svc._installed ? `
     <div class="modal-section">
       <h3>Стабильность</h3>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px">
@@ -544,6 +569,52 @@ async function openServiceModal(id) {
   // Если сервис установлен — загружаем график за 6ч (default tab)
   if (svc._installed && svc._stats) {
     setTimeout(() => loadMetricsChart(svc.id, 21600, null), 100);
+  }
+  // Network info — загружается параллельно
+  if (svc._installed) {
+    loadNetworkInfo(svc.id);
+  }
+}
+
+async function loadNetworkInfo(id) {
+  const sect = document.getElementById('network-info-section');
+  if (!sect) return;
+  try {
+    const r = await fetch('/api/services/' + encodeURIComponent(id) + '/network');
+    const j = await r.json();
+    if (!j.ok) {
+      sect.innerHTML = '<h3>Сеть</h3><div class="text-muted fs-sm">' + escapeHtml(j.error || 'нет данных') + '</div>';
+      return;
+    }
+    const host = location.hostname;
+    const portsHtml = (j.ports || []).map(p => {
+      const url = `http://${host}:${p.host_port}`;
+      const portStr = `${p.bind === '0.0.0.0' ? '' : p.bind + ':'}${p.host_port}→${p.container_port}/${p.proto}`;
+      return `<div class="port-row">
+        <span class="port-pill"><strong>${escapeHtml(p.host_port)}</strong>/${escapeHtml(p.proto)}</span>
+        <span class="text-dim" style="font-size:11px">→ ${escapeHtml(p.container_port)} (${escapeHtml(p.container)})</span>
+        ${p.proto === 'tcp' ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener" class="text-muted" style="font-size:11px;text-decoration:none">↗ открыть</a>` : ''}
+      </div>`;
+    }).join('');
+    const containers = (j.containers || []).map(c => `<code class="port-pill">${escapeHtml(c)}</code>`).join(' ');
+    const internal = (j.internal_hostnames || []).map(h => `<code class="port-pill">${escapeHtml(h)}</code>`).join(' ');
+    sect.innerHTML = `<h3>Сеть</h3>
+      <div class="net-info-grid">
+        <div>
+          <div class="net-label">Внешние порты (TCP/UDP)</div>
+          <div class="port-list">${portsHtml || '<span class="text-dim fs-sm">нет опубликованных портов</span>'}</div>
+        </div>
+        <div>
+          <div class="net-label">Контейнеры</div>
+          <div>${containers || '<span class="text-dim fs-sm">—</span>'}</div>
+        </div>
+        <div>
+          <div class="net-label">Внутренние hostnames (между контейнерами)</div>
+          <div>${internal || '<span class="text-dim fs-sm">—</span>'}</div>
+        </div>
+      </div>`;
+  } catch (e) {
+    sect.innerHTML = '<h3>Сеть</h3><div class="text-err">Сетевая ошибка: ' + escapeHtml(e.message) + '</div>';
   }
 }
 
@@ -704,6 +775,36 @@ async function updateService(id) {
   }
 }
 
+async function bulkAction(action) {
+  const installedCount = _catalog.filter(s => s._installed).length;
+  const labels = {start: 'запустить', stop: 'остановить', restart: 'перезапустить'};
+  if (!confirm(`Точно ${labels[action] || action} ВСЕ ${installedCount} установленных сервисов?\n\nЭто займёт ~30-60 секунд (параллельно).`)) return;
+  showToast(`Bulk ${action} запущен для ${installedCount} сервисов…`);
+  try {
+    const r = await fetch('/api/services/bulk-action', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({action, service_ids: null}),  // null = все installed
+    });
+    if (!r.ok) { showToast('HTTP ' + r.status, true); return; }
+    const j = await r.json();
+    const ok = j.success || 0;
+    const fail = j.fail || 0;
+    showToast(`Готово: ${ok} OK · ${fail} ошибок · из ${j.total}`, fail > 0);
+    if (fail > 0 && j.results) {
+      // Покажем какие именно упали
+      const failed = Object.entries(j.results)
+        .filter(([sid, res]) => !res.ok)
+        .map(([sid, res]) => sid + ': ' + (res.message || '?').slice(0, 60))
+        .join('\n');
+      console.warn('Bulk action failures:\n' + failed);
+    }
+    await loadCatalog();
+  } catch (e) {
+    showToast('Сетевая ошибка: ' + e.message, true);
+  }
+}
+
 async function serviceAction(id, action, btn) {
   const labels = {start: 'Запускаю', stop: 'Останавливаю', restart: 'Перезапускаю'};
   if (btn) btn.disabled = true;
@@ -752,7 +853,19 @@ async function saveServiceSettings(id) {
   }
 }
 
+let _logsEventSource = null;
+let _logsAutoScroll = true;
+let _logsBufferLines = 0;
+
+function _stopLogStream() {
+  if (_logsEventSource) {
+    _logsEventSource.close();
+    _logsEventSource = null;
+  }
+}
+
 async function showServiceLogs(id) {
+  _stopLogStream();
   const svc = _catalog.find(s => s.id === id);
   if (!svc) return;
   const body = document.getElementById('svc-modal-body');
@@ -761,29 +874,127 @@ async function showServiceLogs(id) {
       <div class="modal-icon">📜</div>
       <div style="flex:1">
         <h2 class="modal-title">Логи ${escapeHtml(svc.name)}</h2>
-        <p class="modal-tag">docker compose logs --tail 100</p>
+        <p class="modal-tag">live-tail (SSE) · <span id="logs-status" style="color:var(--ok)">подключение…</span></p>
       </div>
     </div>
     <div class="modal-section">
-      <pre class="post-install" id="svc-logs" style="max-height:420px;overflow-y:auto;font-size:11px">Загрузка...</pre>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;font-size:11.5px;color:var(--text-muted);flex-wrap:wrap">
+        <label>За период:
+          <select id="logs-since" onchange="restartLogStream('${escapeHtml(id)}')" style="padding:3px 6px;font:inherit;font-size:11px;background:var(--bg-inner);color:var(--text);border:1px solid var(--border);border-radius:5px">
+            <option value="5m">5 мин</option>
+            <option value="15m">15 мин</option>
+            <option value="30m" selected>30 мин</option>
+            <option value="1h">1 час</option>
+            <option value="3h">3 часа</option>
+            <option value="6h">6 часов</option>
+          </select>
+        </label>
+        <label>Уровень:
+          <select id="logs-level" onchange="restartLogStream('${escapeHtml(id)}')" style="padding:3px 6px;font:inherit;font-size:11px;background:var(--bg-inner);color:var(--text);border:1px solid var(--border);border-radius:5px">
+            <option value="">все</option>
+            <option value="info">все</option>
+            <option value="warn">⚠ warn+</option>
+            <option value="error">🔴 только ошибки</option>
+          </select>
+        </label>
+        <label>Поиск:
+          <input type="text" id="logs-grep" oninput="filterLogsGrep()" placeholder="regex" style="padding:3px 6px;font:inherit;font-size:11px;background:var(--bg-inner);color:var(--text);border:1px solid var(--border);border-radius:5px;width:140px">
+        </label>
+        <label style="margin-left:auto">
+          <input type="checkbox" id="logs-autoscroll" checked onchange="_logsAutoScroll=this.checked"> авто-скролл
+        </label>
+        <button class="btn-action" style="padding:3px 8px;font-size:11px" onclick="clearLogsView()">очистить</button>
+      </div>
+      <pre class="post-install" id="svc-logs" style="max-height:420px;overflow-y:auto;font-size:11px;font-family:var(--mono);line-height:1.4">подключение к stream…</pre>
+      <p class="fs-sm text-dim mt-2" style="margin-bottom:0">Буфер: <span id="logs-lines-count">0</span> строк · ⚡ новые строки приходят в реальном времени</p>
     </div>
     <div class="modal-actions">
-      <button class="btn-close" onclick="openServiceModal('${escapeHtml(id)}')">← Назад</button>
-      <button class="btn-action" onclick="showServiceLogs('${escapeHtml(id)}')">↻ Обновить</button>
+      <button class="btn-close" onclick="_stopLogStream();openServiceModal('${escapeHtml(id)}')">← Назад</button>
     </div>`;
   document.getElementById('svc-modal').classList.add('show');
-  try {
-    const r = await fetch('/api/services/' + encodeURIComponent(id) + '/logs');
-    const pre = document.getElementById('svc-logs');
-    if (!pre) return;  // модалка уже закрыта пока fetch шёл
-    if (!r.ok) { pre.textContent = 'HTTP ' + r.status; return; }
-    const j = await r.json();
-    pre.textContent = j.ok ? (j.logs || '(пусто)') : 'Ошибка: ' + (j.error || '?');
-    pre.scrollTop = pre.scrollHeight;
-  } catch (e) {
-    const pre = document.getElementById('svc-logs');
-    if (pre) pre.textContent = 'Сетевая ошибка: ' + e.message;
-  }
+  // Замыкаем close обработчик чтобы остановить stream
+  document.getElementById('svc-modal').addEventListener('click', function _esc(e) {
+    if (e.target.id === 'svc-modal') {
+      _stopLogStream();
+      document.getElementById('svc-modal').removeEventListener('click', _esc);
+    }
+  });
+  startLogStream(id);
+}
+
+function startLogStream(id) {
+  _stopLogStream();
+  const since = document.getElementById('logs-since')?.value || '30m';
+  const level = document.getElementById('logs-level')?.value || '';
+  const pre = document.getElementById('svc-logs');
+  if (!pre) return;
+  pre.textContent = '';
+  _logsBufferLines = 0;
+  document.getElementById('logs-lines-count').textContent = '0';
+  document.getElementById('logs-status').textContent = 'подключение…';
+  document.getElementById('logs-status').style.color = 'var(--warn)';
+
+  let url = '/api/services/' + encodeURIComponent(id) + '/logs/stream?since=' + since;
+  if (level) url += '&level=' + level;
+  const es = new EventSource(url);
+  _logsEventSource = es;
+
+  es.onopen = () => {
+    document.getElementById('logs-status').textContent = '● подключен';
+    document.getElementById('logs-status').style.color = 'var(--ok)';
+  };
+  es.onmessage = (ev) => {
+    if (!pre || !document.body.contains(pre)) {
+      _stopLogStream();
+      return;
+    }
+    const grep = document.getElementById('logs-grep')?.value || '';
+    if (grep) {
+      try {
+        if (!new RegExp(grep, 'i').test(ev.data)) return;
+      } catch (e) { /* invalid regex — show all */ }
+    }
+    pre.appendChild(document.createTextNode(ev.data + '\n'));
+    _logsBufferLines++;
+    document.getElementById('logs-lines-count').textContent = _logsBufferLines;
+    // Cap buffer на 2000 строк чтобы DOM не разрастался
+    if (_logsBufferLines > 2000) {
+      const lines = pre.textContent.split('\n');
+      pre.textContent = lines.slice(-1500).join('\n');
+      _logsBufferLines = 1500;
+    }
+    if (_logsAutoScroll) pre.scrollTop = pre.scrollHeight;
+  };
+  es.addEventListener('error', (e) => {
+    if (es.readyState === EventSource.CLOSED) {
+      document.getElementById('logs-status').textContent = '✗ закрыт';
+      document.getElementById('logs-status').style.color = 'var(--text-dim)';
+    } else {
+      document.getElementById('logs-status').textContent = '✗ ошибка';
+      document.getElementById('logs-status').style.color = 'var(--err)';
+    }
+  });
+  es.addEventListener('end', () => {
+    document.getElementById('logs-status').textContent = '⊘ stream завершён';
+    document.getElementById('logs-status').style.color = 'var(--text-dim)';
+  });
+}
+
+function restartLogStream(id) {
+  startLogStream(id);
+}
+
+function clearLogsView() {
+  const pre = document.getElementById('svc-logs');
+  if (pre) pre.textContent = '';
+  _logsBufferLines = 0;
+  document.getElementById('logs-lines-count').textContent = '0';
+}
+
+let _grepFilterTimer = null;
+function filterLogsGrep() {
+  // grep работает только на новые строки — старые остаются как есть.
+  // Если хочешь pure-search — clear + restart.
 }
 
 async function installService(id) {

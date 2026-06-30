@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache, wraps
 from pathlib import Path
 
-from flask import Flask, jsonify, send_from_directory, make_response, request, redirect
+from flask import Flask, jsonify, send_from_directory, make_response, request, redirect, Response
 
 import network as network_bp
 import mikrotik as mt
@@ -104,7 +104,7 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "2.5.0"
+VERSION = "2.6.0"
 RELEASE_DATE = "2026-06-30"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # Минимальная версия клиента (PWA/cache) с которой backend ещё совместим.
@@ -2102,6 +2102,67 @@ def api_services_logs(service_id):
     """Последние 100 строк `docker compose logs`."""
     ok, msg = services_mod.service_action(service_id, "logs")
     return jsonify({"ok": ok, "logs": msg if ok else "", "error": msg if not ok else None})
+
+
+@app.route("/api/services/<service_id>/logs/stream")
+@requires_auth
+def api_services_logs_stream(service_id):
+    """SSE stream: live-tail логов сервиса. Query params:
+      ?since=30m — относительное время (default 30m, max 6h)
+      ?level=error|warn|info — фильтр по уровню (default: все строки)
+    Закрывается когда клиент отключается."""
+    since = request.args.get("since", "30m")
+    level = request.args.get("level")
+    if level not in (None, "", "error", "warn", "info"):
+        level = None
+    if level == "":
+        level = None
+    # Limit since на максимум 6h чтобы не было загрузки 100MB логов на старте
+    if since not in ("5m", "15m", "30m", "1h", "3h", "6h"):
+        since = "30m"
+    gen = services_mod.stream_logs(service_id, since=since, level=level)
+    # SSE response — text/event-stream + no-cache + no-buffer
+    return Response(gen, mimetype="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",   # для nginx если будет reverse-proxy
+    })
+
+
+@app.route("/api/services/<service_id>/network")
+@requires_auth
+def api_services_network(service_id):
+    """Network info из compose.yml: ports, internal hostnames, containers."""
+    info = services_mod.get_compose_network_info(service_id)
+    if not info:
+        return jsonify({"ok": False, "error": "compose.yml не найден"}), 404
+    # Добавляем external base url из CONTROLLER:host_port
+    return jsonify({"ok": True, **info})
+
+
+@app.route("/api/services/bulk-action", methods=["POST"])
+@requires_admin
+@audit_action("services_bulk_action", target_from_path=True,
+              log_details=lambda: request.get_json(force=True, silent=True) or {})
+def api_services_bulk_action():
+    """Bulk start/stop/restart нескольких сервисов параллельно.
+    Body: {action: 'restart', service_ids: [...] | null (=все installed)}"""
+    d = request.get_json(force=True, silent=True) or {}
+    action = d.get("action")
+    if action not in ("start", "stop", "restart"):
+        return jsonify({"ok": False, "error": "action: start|stop|restart"}), 400
+    service_ids = d.get("service_ids")  # None или список
+    if service_ids is not None and not isinstance(service_ids, list):
+        return jsonify({"ok": False, "error": "service_ids must be list or null"}), 400
+    results = services_mod.bulk_action(action, service_ids)
+    success_count = sum(1 for ok, _ in results.values() if ok)
+    return jsonify({
+        "ok": success_count > 0,
+        "total": len(results),
+        "success": success_count,
+        "fail": len(results) - success_count,
+        "results": {sid: {"ok": ok, "message": msg[:200]}
+                    for sid, (ok, msg) in results.items()},
+    })
 
 
 @app.route("/api/services/<service_id>/update", methods=["POST"])

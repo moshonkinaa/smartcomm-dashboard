@@ -2,6 +2,30 @@
 
 Все значимые изменения проекта. Формат — Keep a Changelog + SemVer.
 
+## 2.6.0 — 2026-06-30
+
+**Services: live diagnostics + bulk operations + network introspection.**
+
+### Added — Live-tail logs (SSE)
+- **`GET /api/services/<id>/logs/stream?since=30m&level=warn`** — SSE stream от `docker compose logs --follow`. Закрывается когда клиент отключается. Keepalive каждые 15с.
+- **Фильтры**: `since` (5м/15м/30м/1ч/3ч/6ч, max 6ч защита от загрузки гигабайтов), `level` (info/warn/error — regex по line).
+- **Frontend**: новый UI логов — live-tail с EventSource, фильтры since/level/grep, авто-скролл toggle, буфер cap 2000 строк, статус подключения (🟢/⊘/✗).
+
+### Added — Bulk actions
+- **`POST /api/services/bulk-action`** — параллельный start/stop/restart нескольких сервисов. Body: `{action, service_ids: [...]|null}`. Возвращает per-service результаты.
+- **Frontend**: панель «⚡ Массовые действия» в шапке (показывается при ≥2 установленных): «↻ Перезапустить все», «⏸ Остановить все», «▶ Запустить все». Confirm + общий toast с count'ом успех/ошибка.
+- Threading: backend запускает каждый action в своём потоке, общий timeout 90с.
+
+### Added — Network info card
+- **`GET /api/services/<id>/network`** — парсит compose.yml: список опубликованных портов (host:container/proto), bind address, internal hostnames, container names.
+- **Frontend**: раздел «Сеть» в модалке — порты в формате pill, кликабельные ссылки для TCP, список контейнеров и внутренних DNS-имён (для inter-container communication).
+
+### Operational
+- Audit: bulk-action залогирован через `@audit_action("services_bulk_action")` с details = тело запроса.
+- SSE требует HTTP/1.1 keep-alive — для будущего reverse-proxy установлен `X-Accel-Buffering: no` header.
+
+---
+
 ## 2.5.0 — 2026-06-30
 
 **Services: core diagnostics** — health badges, time-series графики ресурсов, uptime/restart счётчики.
