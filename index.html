@@ -1081,7 +1081,8 @@ function renderIridiumApi(api, prjFile) {
   // Подменяем на .irpz файл (что и есть «название проекта» с точки зрения файловой системы).
   const prjNameShow = prj.name || (file.name ? file.name : '<не задано>');
 
-  const row = (k, v) => '<div class="ir-row"><span class="ir-k">' + escapeHtml(k) + '</span><span class="ir-v">' + (v == null || v === '' ? '<span style="color:var(--text-dim)">—</span>' : escapeHtml(String(v))) + '</span></div>';
+  // v3.0.5: третий аргумент raw=true — не escape'ить value (для collapsible products)
+  const row = (k, v, raw) => '<div class="ir-row"><span class="ir-k">' + escapeHtml(k) + '</span><span class="ir-v">' + (v == null || v === '' ? '<span style="color:var(--text-dim)">—</span>' : (raw ? String(v) : escapeHtml(String(v)))) + '</span></div>';
 
   const devListOpen = _detailsOpen.has('ir-devs') ? 'open' : '';
 
@@ -1106,7 +1107,22 @@ function renderIridiumApi(api, prjFile) {
         ${row('Скрипты', lic.script_mode === '1' ? 'да' : 'нет')}
         ${row('Истекает', lic.expired ? lic.expired : 'бессрочная')}
         ${row('Серийник', serialShort)}
-        ${(lic.products && lic.products.length) ? row('Продукты', lic.products.join(', ')) : ''}
+        ${(lic.products && lic.products.length) ? (function() {
+          // v3.0.5: products может быть массивом строк (старый iRidium) или объектов
+          // {name: "..."} (новый 1.3.86+). Нормализуем + collapsible т.к. до 100+ штук.
+          const names = lic.products
+            .map(p => (typeof p === 'string' ? p : (p && (p.name || p.title || p.id) || '')))
+            .filter(x => x)
+            .sort((a, b) => a.localeCompare(b));
+          if (!names.length) return '';
+          const preview = names.slice(0, 8).join(', ');
+          const rest = names.length - 8;
+          const full = names.join(', ');
+          if (rest <= 0) return row('Продукты', preview);
+          return row('Продукты',
+            `<details style="display:inline"><summary style="cursor:pointer;list-style:none">${escapeHtml(preview)} <span style="color:var(--info);text-decoration:underline">+ ещё ${rest}</span></summary><div style="margin-top:4px;font-size:11px;color:var(--text-muted);max-height:180px;overflow-y:auto">${escapeHtml(full)}</div></details>`,
+            true);
+        })() : ''}
       </div>
       <div class="ir-block">
         <div class="ir-block-title">Проект</div>

@@ -2,6 +2,24 @@
 
 Все значимые изменения проекта. Формат — Keep a Changelog + SemVer.
 
+## 3.0.5 — 2026-07-14
+
+**Fix**: iRidium licence products рендерились как `[object Object], [object Object], ...`
+
+### Root cause
+Новый iRidium 1.3.86 возвращает `licence.products` как массив объектов
+`[{name: "AMX"}, {name: "Crestron"}, ...]` (101 продукт). Старый код
+делал `products.join(', ')` — Array#join вызывает `Object.toString()`
+на объектах = `[object Object]`.
+
+### Fixed
+- Нормализация: массив строк ИЛИ массив объектов `{name}/{title}/{id}` → массив строк.
+- Sort по алфавиту (список большой).
+- Показываем первые 8 + collapsible `<details>` «+ ещё N».
+- Row-helper теперь принимает 3-й аргумент `raw=true` для HTML внутри.
+
+---
+
 ## 3.0.4 — 2026-07-14
 
 **Fix**: Network devices всегда offline на старых SQLite (Buster).
