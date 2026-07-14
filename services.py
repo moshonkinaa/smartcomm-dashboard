@@ -1948,10 +1948,12 @@ def _do_uninstall_worker(sid, delete_data):
             _progress_set(sid, log_line=f"=== Удаление папки {sdir} ===")
             subprocess.run(["sudo", "rm", "-rf", str(sdir)], check=False, timeout=60)
         elif sdir.exists():
-            # Сохраняем data, удаляем только compose файл
+            # Сохраняем data, удаляем только compose файл.
+            # НЕ используем unlink(missing_ok=) — это Python 3.8+, а Buster Py3.7.
             try:
-                compose_path.unlink(missing_ok=True)
-            except (OSError, AttributeError):
+                if compose_path.exists():
+                    compose_path.unlink()
+            except OSError:
                 pass
 
         # 4. БД

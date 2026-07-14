@@ -1621,7 +1621,9 @@ async function loadHistory() {
 }
 
 function escapeHtml(s) {
-  return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  // String(s) — иначе на числе (42) .replace даёт TypeError (белый экран),
+  // а на 0 старое (s||'') теряло значение. null/undefined → ''.
+  return (s == null ? '' : String(s)).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
 function showToast(msg, isErr) {

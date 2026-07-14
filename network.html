@@ -816,6 +816,19 @@ function escapeHtml(s) {
 }
 // Alias — некоторые места исторически использовали escapeAttr; делает то же самое.
 const escapeAttr = escapeHtml;
+// escapeJs — для значения, попадающего в JS-СТРОКУ внутри inline-обработчика
+// (onclick="foo('VALUE')"). escapeHtml здесь НЕ защищает: браузер HTML-декодирует
+// атрибут ДО парсинга JS, поэтому &#39; снова становится ' и рвёт строку (XSS).
+// Экранируем ВСЁ кроме alphanumeric в \xHH / \uHHHH — такой вывод безопасен
+// и в JS-строке, и переживает HTML-декодирование (нет HTML-спецсимволов).
+function escapeJs(s) {
+  return (s == null ? '' : String(s)).replace(/[^a-zA-Z0-9_]/g, c => {
+    const h = c.charCodeAt(0);
+    return h < 256
+      ? '\\x' + h.toString(16).padStart(2, '0')
+      : '\\u' + h.toString(16).padStart(4, '0');
+  });
+}
 function fmtAge(ts) {
   if (!ts) return '—';
   const age = Math.floor(Date.now()/1000 - ts);
@@ -1106,7 +1119,7 @@ function detailHtml(d) {
           <div style="flex:1;min-width:280px">
             <div class="field-label">Теги</div>
             <div id="tags-host-${d.id}" style="border:1px solid var(--border);border-radius:7px;padding:4px 6px;min-height:34px;background:var(--bg)">
-              ${(d.tags || []).map(t => '<span class="tag-chip">' + escapeHtml(t) + '<span class="x" onclick="event.stopPropagation();removeTag(' + d.id + ',&quot;' + escapeAttr(t) + '&quot;)">×</span></span>').join('')}
+              ${(d.tags || []).map(t => '<span class="tag-chip">' + escapeHtml(t) + '<span class="x" onclick="event.stopPropagation();removeTag(' + d.id + ',&quot;' + escapeJs(t) + '&quot;)">×</span></span>').join('')}
               <input type="text" class="tag-input" id="tag-input-${d.id}" placeholder="+ тег"
                 onkeydown="event.stopPropagation();if(event.key==='Enter'||event.key===','){event.preventDefault();addTag(${d.id},this.value);this.value='';}"
                 onclick="event.stopPropagation()">
@@ -1145,9 +1158,9 @@ function detailHtml(d) {
         </div>
         <div style="margin-top: 14px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
           <button class="btn primary" onclick="event.stopPropagation();saveDevice(${d.id})">💾 Сохранить</button>
-          ${url ? `<button class="btn" onclick="event.stopPropagation();window.open('${escapeHtml(url)}', '_blank')">↗ Открыть веб-UI</button>` : ''}
-          ${d.ip ? `<button class="btn" onclick="event.stopPropagation();openWebSSH(${d.id}, '${escapeAttr(d.ip)}')" title="Открыть SSH-терминал в браузере (пароль из credentials)">🖥 Терминал</button>` : ''}
-          ${d.ip ? `<button class="btn" onclick="event.stopPropagation();copySSH('${escapeAttr(d.ip)}')" title="Скопировать команду ssh">📋 SSH cmd</button>` : ''}
+          ${url ? `<button class="btn" onclick="event.stopPropagation();window.open('${escapeJs(url)}', '_blank')">↗ Открыть веб-UI</button>` : ''}
+          ${d.ip ? `<button class="btn" onclick="event.stopPropagation();openWebSSH(${d.id}, '${escapeJs(d.ip)}')" title="Открыть SSH-терминал в браузере (пароль из credentials)">🖥 Терминал</button>` : ''}
+          ${d.ip ? `<button class="btn" onclick="event.stopPropagation();copySSH('${escapeJs(d.ip)}')" title="Скопировать команду ssh">📋 SSH cmd</button>` : ''}
           <button class="btn" id="ping-btn-${d.id}" onclick="event.stopPropagation();pingDevice(${d.id})">📡 Ping сейчас</button>
           <button class="btn" id="fp-btn-${d.id}" onclick="event.stopPropagation();fingerprintDevice(${d.id})">🔬 Опросить службы</button>
           ${(d.device_type === 'network' || d.snmp_community) ? `<button class="btn" id="snmp-btn-${d.id}" onclick="event.stopPropagation();snmpProbe(${d.id})">📊 SNMP опрос</button>` : ''}
@@ -1325,7 +1338,7 @@ function _showSSHPicker(ip, creds) {
   box.onclick = (e) => { if (e.target === box) box.remove(); };
   const rows = creds.map((c, i) => {
     const label = c.label ? escapeHtml(c.label) + ' · ' : '';
-    return `<button class="ssh-pick-row" onclick="document.getElementById('ssh-picker').remove();_openWebSSHWithCred('${escapeAttr(ip)}', ${JSON.stringify(c.username)}, ${JSON.stringify(c.password)})">
+    return `<button class="ssh-pick-row" onclick="document.getElementById('ssh-picker').remove();_openWebSSHWithCred('${escapeJs(ip)}', '${escapeJs(c.username)}', '${escapeJs(c.password)}')">
         <b>${label}${escapeHtml(c.username)}</b>
         <span style="color:var(--text-dim);font-size:11px">${c.notes ? escapeHtml(c.notes) : '—'}</span>
       </button>`;

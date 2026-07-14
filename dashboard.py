@@ -104,7 +104,7 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "3.1.0"
+VERSION = "3.2.0"
 RELEASE_DATE = "2026-06-30"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # Минимальная версия клиента (PWA/cache) с которой backend ещё совместим.
@@ -133,6 +133,32 @@ _AUTH_PUBLIC_PATHS = {
     "/marked.min.js",
 }
 
+# Пути, требующие is_admin (не просто залогинен). Защищают:
+#  1) СЕКРЕТЫ — пароли устройств в открытом виде (credentials GET, export.csv)
+#  2) МУТАЦИИ инвентаря/сети — create/update/delete device, scan, snmp, credentials CRUD
+# Проверка идёт в _global_auth_gate по (method, regex). Non-admin ("клиент")
+# получает 403 на эти пути, но может читать статус/дашборд.
+import re as _re_admin
+_ADMIN_ONLY_RULES = [
+    # (метод-множество, скомпилированный regex по request.path)
+    ({"POST", "PUT", "DELETE", "PATCH"}, _re_admin.compile(r"^/api/network/")),
+    ({"GET"}, _re_admin.compile(r"^/api/network/devices/\d+/credentials$")),
+    ({"GET"}, _re_admin.compile(r"^/api/network/export\.csv$")),
+    ({"POST", "PUT", "DELETE", "PATCH"}, _re_admin.compile(r"^/api/services/")),
+    ({"POST", "PUT", "DELETE"}, _re_admin.compile(r"^/api/mikrotik/")),
+    ({"PUT", "POST", "DELETE"}, _re_admin.compile(r"^/api/iridium/")),
+    ({"POST"}, _re_admin.compile(r"^/api/action/")),
+    ({"POST"}, _re_admin.compile(r"^/api/update/apply$")),
+]
+
+
+def _is_admin_only(method, path):
+    for methods, rx in _ADMIN_ONLY_RULES:
+        if method in methods and rx.match(path):
+            return True
+    return False
+
+
 @app.before_request
 def _global_auth_gate():
     p = request.path
@@ -141,14 +167,21 @@ def _global_auth_gate():
     if request.method == "OPTIONS":
         return None
     sess = _get_session()
-    if sess:
-        request.auth_user = sess
-        return None
-    # Не залогинен:
-    if p.startswith("/api/"):
-        return jsonify({"ok": False, "error": "unauthorized"}), 401
-    # HTML страница — редирект на логин
-    return redirect("/login?next=" + p)
+    if not sess:
+        # Не залогинен:
+        if p.startswith("/api/"):
+            return jsonify({"ok": False, "error": "unauthorized"}), 401
+        return redirect("/login?next=" + p)
+    request.auth_user = sess
+    # Admin-gate для мутаций + секретов. Non-admin юзеры ("клиенты") — 403.
+    if _is_admin_only(request.method, p):
+        try:
+            user = network_bp.auth_get_user(sess["username"])
+        except Exception:
+            user = None
+        if not user or not user.get("is_admin"):
+            return jsonify({"ok": False, "error": "forbidden — только для админа"}), 403
+    return None
 BASE = Path(__file__).resolve().parent
 
 # Pool reused across requests to avoid thread create/destroy churn.
@@ -809,15 +842,23 @@ def _ir_docs(): return iridium_paths()[1]
 def _ir_db():   return iridium_paths()[2]
 
 
-@lru_cache(maxsize=1)
+_IRIDIUM_VERSION_CACHE = {"value": None}
+
+
 def iridium_version():
     """Parse 'Server Version: Pro or Lite:42647 (Jun  1 2026, 10:32:17)'.
-    Cached — binary version doesn't change while service runs."""
+    Кешируем ТОЛЬКО успешный результат вручную — раньше был @lru_cache, который
+    навсегда кешировал None если при первом вызове irserver был недоступен
+    (таймаут/перезапуск), и версия iRidium пропадала до рестарта дашборда."""
+    if _IRIDIUM_VERSION_CACHE["value"] is not None:
+        return _IRIDIUM_VERSION_CACHE["value"]
     out = sh(f"sudo {IR_BIN} --version 2>&1 | head -1", timeout=10)
     m = re.search(r"Server Version:\s*(.+?):(\d+)\s*\(([^)]+)\)", out)
     if m:
-        return {"edition": m.group(1).strip(), "build": m.group(2), "date": m.group(3)}
-    return None
+        result = {"edition": m.group(1).strip(), "build": m.group(2), "date": m.group(3)}
+        _IRIDIUM_VERSION_CACHE["value"] = result
+        return result
+    return None   # не кешируем неудачу — попробуем снова при след. вызове
 
 
 @time_cache(60)
@@ -872,7 +913,7 @@ def iridium_project_info():
                 except Exception:
                     pass
                 return info
-    except (FileNotFoundError, PermissionError):
+    except OSError:  # FileNotFound/Permission/NotADirectory
         pass
     return None
 
@@ -902,7 +943,7 @@ def iridium_clients_count():
 def iridium_db_size():
     try:
         return os.path.getsize(_ir_db())
-    except (FileNotFoundError, PermissionError):
+    except OSError:  # FileNotFound/Permission/NotADirectory
         return None
 
 
@@ -921,7 +962,7 @@ def iridium_proc_info(pid):
             "vm_kb":    int(m_vm.group(1))  if m_vm  else None,
             "threads":  int(m_th.group(1))  if m_th  else None,
         }
-    except (FileNotFoundError, PermissionError):
+    except OSError:  # FileNotFound/Permission/NotADirectory
         return None
 
 
@@ -2427,19 +2468,30 @@ def _apply_update(tarball_url, to_version):
                         if not chunk:
                             break
                         f.write(chunk)
-            # Распаковываем во временный каталог
+            # Распаковываем во временный каталог. SECURITY: path-traversal
+            # защита — отбрасываем members которые вылезают за extract_dir
+            # (Python 3.12+ имеет filter="data", но Buster Py3.7 его не знает —
+            # делаем проверку вручную, работает на всех версиях).
             extract_dir = os.path.join(tmp, "extract")
             os.makedirs(extract_dir)
             with tarfile.open(tar_path, "r:gz") as tar:
-                tar.extractall(extract_dir)
+                safe_members = []
+                base = os.path.realpath(extract_dir)
+                for m in tar.getmembers():
+                    dest = os.path.realpath(os.path.join(extract_dir, m.name))
+                    if dest == base or dest.startswith(base + os.sep):
+                        safe_members.append(m)
+                tar.extractall(extract_dir, members=safe_members)
             # GitHub tarball корневой каталог = "<owner>-<repo>-<sha>/"
             roots = [d for d in os.listdir(extract_dir)
                      if os.path.isdir(os.path.join(extract_dir, d))]
             if not roots:
                 return False, "пустой tarball"
             src_root = os.path.join(extract_dir, roots[0])
-            # Бекап текущей папки приложения
-            shutil.copytree(str(APP), str(BACKUP), dirs_exist_ok=True)
+            # Бекап текущей папки приложения. BACKUP — всегда уникальная свежая
+            # папка (см. выше, с timestamp), поэтому dirs_exist_ok не нужен —
+            # он к тому же Python 3.8+, а Buster идёт с Py3.7.
+            shutil.copytree(str(APP), str(BACKUP))
             # Копируем новые файлы поверх (только .py, .html, .js, .json, .css, .md)
             ext_ok = (".py", ".html", ".js", ".json", ".css", ".md", ".service",
                       ".min.js")
@@ -2616,8 +2668,11 @@ if __name__ == "__main__":
     # и без warning'а «do not use in production». Fallback на Flask dev если waitress нет.
     try:
         from waitress import serve
-        print(f"[server] waitress на :8080 (8 потоков)")
-        serve(app, host="0.0.0.0", port=8080, threads=8, ident="smartcomm-dashboard")
+        # 16 потоков (было 8): SSE live-tail логов держит поток ЗАНЯТЫМ постоянно
+        # пока вкладка открыта. При 8 потоках несколько открытых логов + обычные
+        # запросы → "queue depth" и подвисания. 16 даёт запас (потоки лёгкие).
+        print(f"[server] waitress на :8080 (16 потоков)")
+        serve(app, host="0.0.0.0", port=8080, threads=16, ident="smartcomm-dashboard")
     except ImportError:
         print(f"[server] waitress не найден — fallback на Flask dev-server")
         app.run(host="0.0.0.0", port=8080, debug=False, threaded=True)

@@ -13,8 +13,23 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from flask import Blueprint, jsonify, request, send_from_directory
+import flask as _flask
 
 bp = Blueprint("network", __name__)
+
+# Flask 1.x (Raspbian Buster) использует send_file(cache_timeout=), Flask 2.0+
+# переименовал в max_age=. Определяем правильный kwarg один раз.
+try:
+    _FLASK_MAJOR = int((_flask.__version__ or "0").split(".")[0])
+except (ValueError, AttributeError):
+    _FLASK_MAJOR = 2
+_SENDFILE_AGE_KW = "max_age" if _FLASK_MAJOR >= 2 else "cache_timeout"
+
+
+def _send_file_cached(path, age):
+    """send_file с версионно-корректным cache kwarg (Flask 1.x vs 2.x+)."""
+    from flask import send_file
+    return send_file(str(path), **{_SENDFILE_AGE_KW: age})
 BASE = Path(__file__).resolve().parent
 
 # DB lives in pi-writable state dir (systemd StateDirectory).
@@ -25,9 +40,14 @@ DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 # ============ DB ============
 
 def db():
-    conn = sqlite3.connect(str(DB_PATH))
+    # timeout=10 + WAL: без этого при конкурентном доступе (waitress-потоки +
+    # background presence/sampler) получаем "database is locked" → 500 на всех
+    # endpoints именно в момент сетевого сбоя. WAL позволяет concurrent read+write.
+    conn = sqlite3.connect(str(DB_PATH), timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 10000")
     return conn
 
 
@@ -662,25 +682,41 @@ def auth_create_session(username, ip, user_agent):
 
 
 def auth_get_session(sid):
-    """Returns dict or None. Touches last_seen."""
+    """Returns dict or None. Touches last_seen.
+    RELIABILITY: обёрнуто в try/except — эта функция вызывается из auth-gate на
+    КАЖДЫЙ HTTP-запрос. Если БД временно залочена (despite WAL), не роняем 500
+    на весь дашборд — читаем сессию, last_seen обновим при следующем запросе."""
     if not sid or len(sid) != 64:
         return None
     now = int(time.time())
-    with db() as c:
-        row = c.execute(
-            "SELECT sid, username, created_at, last_seen, ip, user_agent "
-            "FROM auth_sessions WHERE sid = ?", (sid,)
-        ).fetchone()
-        if not row:
+    try:
+        with db() as c:
+            row = c.execute(
+                "SELECT sid, username, created_at, last_seen, ip, user_agent "
+                "FROM auth_sessions WHERE sid = ?", (sid,)
+            ).fetchone()
+            if not row:
+                return None
+            if (now - row["created_at"]) > SESSION_TTL_SEC:
+                c.execute("DELETE FROM auth_sessions WHERE sid = ?", (sid,))
+                return None
+            c.execute(
+                "UPDATE auth_sessions SET last_seen = ? WHERE sid = ?",
+                (now, sid)
+            )
+        return dict(row)
+    except sqlite3.OperationalError:
+        # database is locked / busy — не валим весь запрос. Повторно прочитаем
+        # без обновления last_seen (best-effort).
+        try:
+            with db() as c:
+                row = c.execute(
+                    "SELECT sid, username, created_at, last_seen, ip, user_agent "
+                    "FROM auth_sessions WHERE sid = ?", (sid,)
+                ).fetchone()
+            return dict(row) if row else None
+        except sqlite3.Error:
             return None
-        if (now - row["created_at"]) > SESSION_TTL_SEC:
-            c.execute("DELETE FROM auth_sessions WHERE sid = ?", (sid,))
-            return None
-        c.execute(
-            "UPDATE auth_sessions SET last_seen = ? WHERE sid = ?",
-            (now, sid)
-        )
-    return dict(row)
 
 
 def auth_delete_session(sid):
@@ -925,10 +961,31 @@ def _fp_worker():
 threading.Thread(target=_fp_worker, daemon=True).start()
 
 
+def _valid_cidr_or_ip(target):
+    """True если target — валидная подсеть (CIDR) или одиночный IP.
+    Защита от argument-injection в `sudo nmap` (напр. subnet='-oG /etc/x')."""
+    t = (target or "").strip()
+    try:
+        if "/" in t:
+            ipaddress.ip_network(t, strict=False)
+        else:
+            ipaddress.ip_address(t)
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
 def nmap_scan(subnet):
-    """Return list of {ip, mac, vendor, hostname} for live hosts in subnet."""
+    """Return list of {ip, mac, vendor, hostname} for live hosts in subnet.
+
+    SECURITY: subnet валидируется как CIDR/IP + `--` перед позиционным
+    аргументом — иначе subnet='-oG file' / '--script=...' = arg-injection
+    в sudo nmap (запуск NSE-скриптов от root)."""
+    subnet = (subnet or "").strip()
+    if not _valid_cidr_or_ip(subnet):
+        raise RuntimeError(f"invalid scan target: {subnet!r}")
     out = subprocess.run(
-        ["sudo", "nmap", "-sn", "-PR", "-oX", "-", subnet],
+        ["sudo", "nmap", "-sn", "-PR", "-oX", "-", "--", subnet],
         capture_output=True, text=True, timeout=180,
     )
     if out.returncode != 0:
@@ -1016,11 +1073,16 @@ def merge_scan(hosts):
 
 def nmap_service_scan(ip):
     """Probe common service ports on a single host. Returns list of
-    {port, proto, name, product, version}."""
+    {port, proto, name, product, version}.
+
+    SECURITY: ip валидируется + `--` перед позиционным аргументом."""
+    ip = (ip or "").strip()
+    if not _valid_ip(ip):
+        raise RuntimeError(f"invalid ip: {ip!r}")
     out = subprocess.run(
         ["sudo", "nmap", "-sV", "-T4", "--version-intensity", "3",
          "-p", "22,80,443,554,1883,5000,8000,8080,8443,8888,9000,9100,1900",
-         "-oX", "-", ip],
+         "-oX", "-", "--", ip],
         capture_output=True, text=True, timeout=90,
     )
     if out.returncode != 0:
@@ -1155,6 +1217,10 @@ def create_device():
     fields = ("mac", "ip", "hostname", "vendor", "device_type", "name",
               "room", "description", "login", "password", "url", "notes")
     vals = {f: d.get(f) for f in fields}
+    # SECURITY: ip идёт в argv nmap/ping — валидируем при записи (defense-in-depth,
+    # subprocess-функции тоже проверяют). Пустой ip разрешён (manual device без IP).
+    if vals.get("ip") and not _valid_ip(vals["ip"]):
+        return jsonify({"ok": False, "error": "неверный формат IP"}), 400
     if d.get("mac"):
         vals["mac"] = d["mac"].lower()
     tags = json.dumps(d.get("tags") or [])
@@ -1185,6 +1251,9 @@ def create_device():
 @bp.route("/api/network/devices/<int:did>", methods=["PUT"])
 def update_device(did):
     d = request.get_json(force=True) or {}
+    # SECURITY: ip идёт в argv nmap/ping — валидируем при записи
+    if d.get("ip") and not _valid_ip(d["ip"]):
+        return jsonify({"ok": False, "error": "неверный формат IP"}), 400
     editable = ("name", "room", "description", "login", "password",
                 "url", "device_type", "notes", "ip", "hostname",
                 "vendor", "mac", "monitor_on_dashboard")
@@ -1517,7 +1586,7 @@ def get_photo_file(pid):
     p = PHOTOS_DIR / row["filename"]
     if not p.exists():
         return jsonify({"ok": False, "error": "file missing on disk"}), 404
-    return send_file(str(p), max_age=86400)
+    return _send_file_cached(p, 86400)
 
 
 @bp.route("/api/network/photos/<int:pid>", methods=["DELETE"])
@@ -1555,7 +1624,7 @@ def get_first_photo(did):
     p = PHOTOS_DIR / row["filename"]
     if not p.exists():
         return jsonify({"ok": False, "error": "file missing"}), 404
-    return send_file(str(p), max_age=300)
+    return _send_file_cached(p, 300)
 
 
 # ============ AUDIT LOG ============
@@ -1639,9 +1708,12 @@ def ping_device(did):
         dev = c.execute("SELECT * FROM devices WHERE id = ?", (did,)).fetchone()
     if not dev or not dev["ip"]:
         return jsonify({"ok": False, "error": "no IP"}), 400
+    # SECURITY: ip мог быть задан вручную — валидируем + `--` перед аргументом
+    if not _valid_ip(dev["ip"]):
+        return jsonify({"ok": False, "error": "invalid IP"}), 400
     try:
         r = subprocess.run(
-            ["ping", "-c", "1", "-W", "2", dev["ip"]],
+            ["ping", "-c", "1", "-W", "2", "--", dev["ip"]],
             capture_output=True, text=True, timeout=5,
         )
         alive = r.returncode == 0
@@ -1865,9 +1937,36 @@ def merge_mdns(results):
     return enriched
 
 
+def _valid_ip(ip):
+    """True если ip — валидный IPv4/IPv6. Защита от injection в argv."""
+    try:
+        ipaddress.ip_address((ip or "").strip())
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
+# SNMP community: RFC не ограничивает символы, но для безопасности разрешаем
+# только печатаемые ASCII без shell-метасимволов. Реальные community редко
+# содержат что-то кроме букв/цифр/-/_.
+_SNMP_COMMUNITY_RE = re.compile(r"^[A-Za-z0-9_@.\-]{1,64}$")
+
+
 def snmp_probe(ip, community="public"):
-    """Basic SNMP info: sysDescr, sysName, sysUpTime, ifNumber."""
+    """Basic SNMP info: sysDescr, sysName, sysUpTime, ifNumber.
+
+    SECURITY: используем list-form subprocess (shell=False) — НЕ f-string в sh().
+    Раньше здесь была RCE: `sh(f"snmpget -c {community} {ip}")` с shell=True
+    позволяла инъекцию через community/ip из HTTP-запроса → root (NOPASSWD sudo).
+    Теперь ip валидируется, community — по whitelist, всё идёт отдельными argv."""
     info = {}
+    ip = (ip or "").strip()
+    community = (community or "public").strip()
+    # Жёсткая валидация — до любого запуска subprocess
+    if not _valid_ip(ip):
+        return info
+    if not _SNMP_COMMUNITY_RE.match(community):
+        return info
     oids = [
         ("1.3.6.1.2.1.1.1.0", "sysDescr"),
         ("1.3.6.1.2.1.1.5.0", "sysName"),
@@ -1875,14 +1974,18 @@ def snmp_probe(ip, community="public"):
         ("1.3.6.1.2.1.2.1.0", "ifNumber"),
     ]
     for oid, key in oids:
-        out = sh(
-            f"snmpget -v2c -c {community} -t 2 -r 1 {ip} {oid} 2>/dev/null",
-            timeout=6,
-        )
+        try:
+            r = subprocess.run(
+                ["snmpget", "-v2c", "-c", community, "-t", "2", "-r", "1",
+                 "--", ip, oid],
+                capture_output=True, text=True, timeout=6,
+            )
+            out = r.stdout
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            continue
         m = re.search(r"=\s*\w+:\s*(.+)$", out.strip())
         if m:
             v = m.group(1).strip().strip('"')
-            # strip type prefix like "STRING:" if any (just in case)
             info[key] = v
     return info
 
@@ -2011,10 +2114,13 @@ MISS_THRESHOLD = 3   # 3 минуты тишины перед попыткой p
 
 
 def _icmp_ping(ip, timeout_sec=1):
-    """Быстрый ICMP-ping. True если устройство ответило хотя бы раз из 2 пакетов."""
+    """Быстрый ICMP-ping. True если устройство ответило хотя бы раз из 2 пакетов.
+    SECURITY: ip валидируется + `--` (значения из БД, могли быть заданы вручную)."""
+    if not _valid_ip(ip):
+        return False
     try:
         r = subprocess.run(
-            ["ping", "-c", "2", "-W", str(timeout_sec), "-q", ip],
+            ["ping", "-c", "2", "-W", str(timeout_sec), "-q", "--", ip],
             capture_output=True, text=True, timeout=timeout_sec * 2 + 1
         )
         return r.returncode == 0
@@ -2042,6 +2148,10 @@ def _presence_check():
     ping_recovered = 0       # сколько спасли через ICMP
     truly_offline = set()
 
+    # === Транзакция 1: ARP-результаты + сбор кандидатов на ICMP ===
+    # КОРОТКАЯ — никаких subprocess/ping внутри. Иначе write-lock висит секунды
+    # (ICMP до 3с/устройство) → все HTTP-запросы получают "database is locked".
+    ping_candidates = []   # [(did, ip)] — пингуем ПОСЛЕ закрытия транзакции
     with db() as c:
         prev_online = {r["id"] for r in c.execute(
             "SELECT id FROM devices WHERE is_online = 1"
@@ -2049,8 +2159,7 @@ def _presence_check():
         seen_ids = set()
         for h in hosts:
             # Двухшаговый SELECT+UPDATE вместо `RETURNING id` —
-            # `UPDATE ... RETURNING` требует SQLite 3.35+ (Feb 2021),
-            # а Raspbian Buster идёт со sqlite 3.27.2. На Bookworm тоже работает.
+            # `UPDATE ... RETURNING` требует SQLite 3.35+ (Buster = 3.27.2).
             if h.get("mac"):
                 ids = [r["id"] for r in c.execute(
                     "SELECT id FROM devices WHERE mac = ?", (h["mac"],)
@@ -2073,7 +2182,6 @@ def _presence_check():
                          WHERE ip = ? AND (mac IS NULL OR mac = '')
                     """, (now, h["ip"]))
                     seen_ids.update(ids)
-        # Те кого видели — сбрасываем счётчик пропусков
         for did in seen_ids:
             _PRESENCE_MISSES.pop(did, None)
 
@@ -2083,30 +2191,32 @@ def _presence_check():
             _PRESENCE_MISSES[did] = _PRESENCE_MISSES.get(did, 0) + 1
             if _PRESENCE_MISSES[did] < MISS_THRESHOLD:
                 continue   # ещё в пределах гистерезиса — оставляем online
-            # Подряд MISS_THRESHOLD пропусков — пробуем ICMP перед маркировкой offline
             row = c.execute("SELECT ip FROM devices WHERE id=?", (did,)).fetchone()
             ip = row["ip"] if row else None
-            if ip and _icmp_ping(ip):
-                # Живое — обновляем как онлайн, сбрасываем счётчик
-                _PRESENCE_MISSES.pop(did, None)
-                c.execute(
-                    "UPDATE devices SET is_online = 1, last_seen = ? WHERE id = ?",
-                    (now, did)
-                )
-                seen_ids.add(did)
-                ping_recovered += 1
-            else:
-                truly_offline.add(did)
+            ping_candidates.append((did, ip))   # пинг — ВНЕ транзакции
 
-        # Применяем offline (только подтверждённые ICMP-молчанием)
+    # === ICMP-пинги ВНЕ транзакции (тут БД не залочена) ===
+    for did, ip in ping_candidates:
+        if ip and _icmp_ping(ip):
+            _PRESENCE_MISSES.pop(did, None)
+            seen_ids.add(did)
+            ping_recovered += 1
+        else:
+            truly_offline.add(did)
+
+    # === Транзакция 2: применяем recovered/offline + события. Тоже короткая. ===
+    with db() as c:
+        # Recovered через ICMP — обновляем last_seen
+        recovered = [did for did, ip in ping_candidates if did in seen_ids]
+        for did in recovered:
+            c.execute("UPDATE devices SET is_online = 1, last_seen = ? WHERE id = ?",
+                      (now, did))
         if truly_offline:
             ph = ",".join("?" * len(truly_offline))
             c.execute(f"UPDATE devices SET is_online = 0 WHERE id IN ({ph})",
                       list(truly_offline))
             for did in truly_offline:
                 _PRESENCE_MISSES.pop(did, None)
-
-        # Логируем переходы (только реальные, после ICMP-проверки)
         went_online = seen_ids - prev_online
         for did in went_online:
             c.execute("""INSERT INTO device_events (device_id, event_type, ts)

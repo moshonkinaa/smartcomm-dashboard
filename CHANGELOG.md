@@ -2,6 +2,38 @@
 
 Все значимые изменения проекта. Формат — Keep a Changelog + SemVer.
 
+## 3.2.0 — 2026-07-14
+
+**Security + Reliability аудит** — 11 находок (мульти-агентный дебаг на парке из 4 разных контроллеров: armv7/aarch64/x86, Buster/Trixie, Flask 1.0/3.1, SQLite 3.27/3.46).
+
+### 🔴 CRITICAL — RCE
+- **SNMP command injection → root** (`network.py` `snmp_probe`). Было: `sh(f"snmpget -c {community} {ip}")` с `shell=True` — любой залогиненный юзер слал `{"community":"x; sudo reboot #"}` → выполнение с NOPASSWD sudo ALL. Стало: list-form `subprocess.run(shell=False)` + валидация community (whitelist) + IP (`ipaddress`).
+
+### 🟠 HIGH
+- **nmap/ping arg-injection** — `subnet`/`ip` шли отдельными argv, но `-oG`/`--script` = запуск NSE от root. Добавлен `--` перед позиционными + валидация CIDR/IP.
+- **DB-локи → 500 на всех endpoints** — `_presence_check` держал write-lock во время ICMP-ping (до 3с/устройство), БД без WAL, auth писал last_seen на каждый запрос. При сетевом сбое дашборд падал. Фикс: **WAL + busy_timeout=10s**, ICMP-ping вынесены из транзакции (2 короткие транзакции), `auth_get_session` в try/except.
+- **`send_file(max_age=)`** — Flask 2.0+ kwarg, ломал фото устройств на **Pi4 Buster** (Flask 1.0). Версионный шим `cache_timeout`/`max_age`.
+- **`copytree(dirs_exist_ok=)`** — Py3.8+, ломал авто-обновление на Pi4 (Py3.7). Убран.
+- **Пароли устройств** — `/credentials` и `export.csv` отдавали пароли любому юзеру. Теперь admin-only.
+- **Stored XSS** — `escapeHtml` в inline `onclick` не защищал (HTML-декод до JS). Добавлен `escapeJs()` (`\xHH`-экранирование) для url/ip/tag/credentials.
+
+### 🟡 MEDIUM
+- **Admin-gate** — non-admin («клиент») больше не может менять/удалять инвентарь и сеть. Мутации + секреты требуют `is_admin` (глобальный gate по method+path).
+- **`escapeHtml` на числах** (index.html) — падал `TypeError` на `42`, терял `0`. Теперь `String(s)`.
+- **`iridium_version` lru_cache** — кешировал `None` навсегда при первом фейле. Кешируем только успех.
+- **`_safe_int` MikroTik** — уже в v3.1.0.
+
+### 🟢 LOW
+- `Path.unlink(missing_ok=)` (Py3.8+) → `if exists(): unlink()`.
+- `tar.extractall` — path-traversal фильтр (проверка что member внутри extract_dir).
+- **Waitress 8 → 16 потоков** — SSE live-tail держит поток занятым, при 8 подвисало.
+
+### Проверено
+- Синтаксис всех 4 py-модулей OK. Py3.7-compat: 0 walrus/dirs_exist_ok/missing_ok/max_age/RETURNING в коде (только комментарии).
+- iRidium на production Pi4 не пострадал за весь дебаг (PID 517 живой).
+
+---
+
 ## 3.1.0 — 2026-07-14
 
 **Added**: температура CPU MikroTik в плитке «MikroTik · CPU».
