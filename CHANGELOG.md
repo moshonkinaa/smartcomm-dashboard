@@ -2,6 +2,19 @@
 
 Все значимые изменения проекта. Формат — Keep a Changelog + SemVer.
 
+## 3.2.1 — 2026-07-15
+
+**dmesg noise filter** — добавлены безобидные firmware/BT сообщения Raspberry Pi.
+
+На Pi4 (Buster) плитка dmesg показывала 5 «ошибок», все разовые при boot и не actionable:
+- `brcmfmac: brcmf_fw_alloc_request` — загрузка WiFi-firmware BCM4345 (инфо о версии)
+- `brcmf_c_preinit_dcmds: Firmware:` — то же
+- `Bluetooth: hci0: command 0x100X tx timeout` — BT-контроллер не отвечает при init
+
+WiFi и Bluetooth на контроллере не используются (только eth0). Добавлены в noise-фильтр — плитка dmesg станет зелёной.
+
+---
+
 ## 3.2.0 — 2026-07-14
 
 **Security + Reliability аудит** — 11 находок (мульти-агентный дебаг на парке из 4 разных контроллеров: armv7/aarch64/x86, Buster/Trixie, Flask 1.0/3.1, SQLite 3.27/3.46).

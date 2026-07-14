@@ -104,7 +104,7 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "3.2.0"
+VERSION = "3.2.1"
 RELEASE_DATE = "2026-06-30"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # Минимальная версия клиента (PWA/cache) с которой backend ещё совместим.
@@ -1259,6 +1259,13 @@ _DMESG_KNOWN_FIRMWARE_NOISE = (
     # Raspberry Pi: WiFi firmware отвергает country setting если используется
     # только Ethernet — безобидно, WiFi всё равно работает по дефолту
     "brcmf_cfg80211_reg_notifier: Firmware rejected country setting",
+    # Raspberry Pi (Buster/старые): загрузка WiFi-firmware BCM4345/чипов —
+    # это ИНФО о версии прошивки, kernel зря метит err. WiFi не используется.
+    "brcmfmac: brcmf_fw_alloc_request",
+    "brcmf_c_preinit_dcmds: Firmware:",
+    # Bluetooth-контроллер не отвечает при init (BT не используется — только
+    # eth0). Разовые tx-timeout при boot, не влияют на работу.
+    "Bluetooth: hci0: command",
 )
 
 
