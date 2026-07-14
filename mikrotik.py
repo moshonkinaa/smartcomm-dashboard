@@ -47,6 +47,24 @@ def _basic_auth(user, password):
     return "Basic " + base64.b64encode(s).decode()
 
 
+def _safe_int(v, default=0):
+    """int() из сырого значения RouterOS REST. Не падает на пустой строке /
+    значении с суффиксом / None — возвращает default вместо ValueError.
+    RouterOS иногда отдаёт '12.5' или '' или значения с единицами."""
+    if v is None:
+        return default
+    try:
+        return int(v)
+    except (ValueError, TypeError):
+        try:
+            # На случай '12.5' или '53C' — берём ведущее число
+            import re as _re
+            m = _re.match(r"-?\d+", str(v).strip())
+            return int(m.group(0)) if m else default
+        except Exception:
+            return default
+
+
 def _req(network_bp, path, method="GET", body=None, timeout=4):
     """GET/POST на /rest/<path>. Возвращает распарсенный JSON или None."""
     ip = _settings_get(network_bp, "mikrotik_ip", _default_mt_ip(network_bp))
@@ -110,6 +128,43 @@ def mt_identity(network_bp):
 def mt_interfaces(network_bp):
     """Все интерфейсы со счётчиками rx/tx-byte."""
     return _req(network_bp, "interface") or []
+
+
+@cached(30)
+def mt_health(network_bp):
+    """/system/health — температура/напряжение/вентилятор. Возвращает список dict'ов
+    вида [{"name":"cpu-temperature","value":"53"}, ...]. Формат отличается между
+    моделями:
+      - RB5009: отдаёт единый объект {"name":"cpu-temperature","value":"53"}
+      - RB4011: массив [{"name":"voltage",...}, {"name":"temperature","value":"54"}]
+      - Старые/малые модели (hAP, hEX): могут не иметь датчиков вообще → []
+    Нормализуем всё в список."""
+    j = _req(network_bp, "system/health")
+    if j is None:
+        return []
+    if isinstance(j, dict):
+        return [j]
+    if isinstance(j, list):
+        return j
+    return []
+
+
+def mt_cpu_temp_c(network_bp):
+    """Температура CPU MikroTik в °C или None если датчика нет / не публикуется.
+    Ищем по разным именам метрик которые используют разные модели RouterOS."""
+    health = mt_health(network_bp)
+    if not health:
+        return None
+    # Приоритет: cpu-temperature > temperature > board-temperature
+    # (cpu-temperature точнее, temperature на RB4011 = температура платы/CPU)
+    by_name = {}
+    for item in health:
+        if isinstance(item, dict) and item.get("name"):
+            by_name[item["name"]] = item.get("value")
+    for key in ("cpu-temperature", "temperature", "board-temperature", "cpu-temp"):
+        if key in by_name:
+            return _safe_int(by_name[key], default=None)
+    return None
 
 
 @cached(30)
@@ -222,13 +277,17 @@ def mt_status_snapshot(network_bp):
                 wan_total_tx = int(ifa.get("tx-byte", 0) or 0)
                 break
 
-    # Конвертим в человеческие единицы
-    total_mem = int(res.get("total-memory", 0))
-    free_mem = int(res.get("free-memory", 0))
+    # Конвертим в человеческие единицы. _safe_int — RouterOS иногда отдаёт
+    # значения с суффиксами / пустые строки на нестандартных прошивках.
+    total_mem = _safe_int(res.get("total-memory"))
+    free_mem = _safe_int(res.get("free-memory"))
     used_mem = total_mem - free_mem
-    total_hdd = int(res.get("total-hdd-space", 0))
-    free_hdd = int(res.get("free-hdd-space", 0))
+    total_hdd = _safe_int(res.get("total-hdd-space"))
+    free_hdd = _safe_int(res.get("free-hdd-space"))
     used_hdd = total_hdd - free_hdd
+
+    # Температура CPU — есть не на всех моделях (hAP lite/mini без датчика).
+    cpu_temp = mt_cpu_temp_c(network_bp)
 
     return {
         "configured": True,
@@ -237,9 +296,10 @@ def mt_status_snapshot(network_bp):
         "identity": identity,
         "board": res.get("board-name"),
         "version": res.get("version"),
-        "cpu_load": int(res.get("cpu-load", 0)),
-        "cpu_count": int(res.get("cpu-count", 0)),
-        "cpu_freq_mhz": int(res.get("cpu-frequency", 0)),
+        "cpu_load": _safe_int(res.get("cpu-load")),
+        "cpu_count": _safe_int(res.get("cpu-count")),
+        "cpu_freq_mhz": _safe_int(res.get("cpu-frequency")),
+        "cpu_temp_c": cpu_temp,   # None если датчика нет
         "arch": res.get("architecture-name"),
         "uptime": res.get("uptime"),
         "mem": {

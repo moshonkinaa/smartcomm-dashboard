@@ -104,7 +104,7 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "3.0.6"
+VERSION = "3.1.0"
 RELEASE_DATE = "2026-06-30"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # Минимальная версия клиента (PWA/cache) с которой backend ещё совместим.

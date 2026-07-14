@@ -417,7 +417,7 @@
   <div class="grid grid-4" id="mt-row" style="display:none;margin-top:12px">
     <div class="card">
       <p class="card-title">MikroTik · CPU <span id="mt-cpu-meta" style="font-size:10px;color:var(--text-dim);font-weight:400">—</span></p>
-      <p class="card-value" id="mt-cpu">—</p>
+      <p class="card-value" id="mt-cpu">—<span id="mt-cpu-temp" style="font-size:14px;font-weight:400;color:var(--text-muted);margin-left:8px"></span></p>
       <p class="card-sub" id="mt-cpu-sub">—</p>
       <p class="card-sub" id="mt-uptime-sub" style="margin-top:2px;color:var(--text-dim)">—</p>
       <div class="bar"><div class="bar-fill" id="mt-cpu-bar"></div></div>
@@ -1767,7 +1767,17 @@ async function loadMikrotik() {
       return;
     }
     // CPU
-    document.getElementById('mt-cpu').textContent = j.cpu_load + ' %';
+    document.getElementById('mt-cpu').firstChild.textContent = j.cpu_load + ' %';
+    // Температура CPU MikroTik — показываем только если датчик есть (не все модели)
+    const mtTemp = document.getElementById('mt-cpu-temp');
+    if (j.cpu_temp_c != null) {
+      const tc = j.cpu_temp_c;
+      const col = tc >= 70 ? 'var(--err)' : tc >= 60 ? 'var(--warn)' : 'var(--text-muted)';
+      mtTemp.textContent = '🌡 ' + tc + '°C';
+      mtTemp.style.color = col;
+    } else {
+      mtTemp.textContent = '';
+    }
     document.getElementById('mt-cpu-sub').textContent =
       j.cpu_count + ' ядра @ ' + j.cpu_freq_mhz + ' МГц · ' + j.arch;
     document.getElementById('mt-cpu-sub').style.color = '';
