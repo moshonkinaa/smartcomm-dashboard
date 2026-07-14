@@ -2048,22 +2048,31 @@ def _presence_check():
         )}
         seen_ids = set()
         for h in hosts:
+            # Двухшаговый SELECT+UPDATE вместо `RETURNING id` —
+            # `UPDATE ... RETURNING` требует SQLite 3.35+ (Feb 2021),
+            # а Raspbian Buster идёт со sqlite 3.27.2. На Bookworm тоже работает.
             if h.get("mac"):
-                rows = c.execute("""
-                    UPDATE devices
-                       SET is_online = 1, last_seen = ?, ip = COALESCE(?, ip)
-                     WHERE mac = ?
-                     RETURNING id
-                """, (now, h["ip"], h["mac"])).fetchall()
+                ids = [r["id"] for r in c.execute(
+                    "SELECT id FROM devices WHERE mac = ?", (h["mac"],)
+                ).fetchall()]
+                if ids:
+                    c.execute("""
+                        UPDATE devices
+                           SET is_online = 1, last_seen = ?, ip = COALESCE(?, ip)
+                         WHERE mac = ?
+                    """, (now, h["ip"], h["mac"]))
+                    seen_ids.update(ids)
             elif h.get("ip"):
-                rows = c.execute("""
-                    UPDATE devices SET is_online = 1, last_seen = ?
-                     WHERE ip = ? AND (mac IS NULL OR mac = '')
-                     RETURNING id
-                """, (now, h["ip"])).fetchall()
-            else:
-                rows = []
-            seen_ids.update(r["id"] for r in rows)
+                ids = [r["id"] for r in c.execute(
+                    "SELECT id FROM devices WHERE ip = ? AND (mac IS NULL OR mac = '')",
+                    (h["ip"],)
+                ).fetchall()]
+                if ids:
+                    c.execute("""
+                        UPDATE devices SET is_online = 1, last_seen = ?
+                         WHERE ip = ? AND (mac IS NULL OR mac = '')
+                    """, (now, h["ip"]))
+                    seen_ids.update(ids)
         # Те кого видели — сбрасываем счётчик пропусков
         for did in seen_ids:
             _PRESENCE_MISSES.pop(did, None)

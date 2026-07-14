@@ -2,6 +2,30 @@
 
 Все значимые изменения проекта. Формат — Keep a Changelog + SemVer.
 
+## 3.0.4 — 2026-07-14
+
+**Fix**: Network devices всегда offline на старых SQLite (Buster).
+
+### Root cause
+`_presence_check()` использовал `UPDATE ... RETURNING id` — SQL синтаксис
+SQLite 3.35+ (Feb 2021). На Raspbian Buster идёт **SQLite 3.27.2**
+(2019) → OperationalError: near "RETURNING", presence-loop падал при
+каждом вызове → is_online НИКОГДА не устанавливался в 1.
+
+Симптом: все network-устройства показаны offline, хотя nmap-скан ARP
+находит 17+ хостов и правильно записывает MAC в БД.
+
+### Fixed
+- Заменил `UPDATE ... RETURNING id` на двухшаговый SELECT+UPDATE.
+  Работает на всех версиях SQLite (Buster 3.27, Bookworm 3.40+, x86).
+
+### Context
+Развёрнут на Pi 4 клиента (192.168.23.4, Raspbian Buster). Дашборд
+показывал 18 устройств все offline. Diagnostic вернул
+`OperationalError: near "RETURNING"`.
+
+---
+
 ## 3.0.3 — 2026-07-14
 
 **Complete iRidium hide** — забыл 3 плитки в v3.0.1.
