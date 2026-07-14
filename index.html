@@ -1108,19 +1108,21 @@ function renderIridiumApi(api, prjFile) {
         ${row('Истекает', lic.expired ? lic.expired : 'бессрочная')}
         ${row('Серийник', serialShort)}
         ${(lic.products && lic.products.length) ? (function() {
-          // v3.0.5: products может быть массивом строк (старый iRidium) или объектов
-          // {name: "..."} (новый 1.3.86+). Нормализуем + collapsible т.к. до 100+ штук.
+          // v3.0.6: products = массив объектов {name}. Но iRidium кладёт туда мусор:
+          // помимо реальных названий («AMX», «Modbus TCP») попадаются числовые
+          // строки-заглушки («1», «103», «112») — это внутренние product id без имени.
+          // Фильтруем их и НЕ сортируем (порядок от iRidium осмысленный).
           const names = lic.products
-            .map(p => (typeof p === 'string' ? p : (p && (p.name || p.title || p.id) || '')))
-            .filter(x => x)
-            .sort((a, b) => a.localeCompare(b));
+            .map(p => (typeof p === 'string' ? p : (p && p.name) || ''))
+            .map(s => String(s).trim())
+            .filter(s => s && !/^\d+$/.test(s));   // выкидываем чисто-числовые
           if (!names.length) return '';
           const preview = names.slice(0, 8).join(', ');
           const rest = names.length - 8;
           const full = names.join(', ');
           if (rest <= 0) return row('Продукты', preview);
           return row('Продукты',
-            `<details style="display:inline"><summary style="cursor:pointer;list-style:none">${escapeHtml(preview)} <span style="color:var(--info);text-decoration:underline">+ ещё ${rest}</span></summary><div style="margin-top:4px;font-size:11px;color:var(--text-muted);max-height:180px;overflow-y:auto">${escapeHtml(full)}</div></details>`,
+            `<details style="display:inline"><summary style="cursor:pointer;list-style:none">${escapeHtml(preview)} <span style="color:var(--info);text-decoration:underline">+ ещё ${rest}</span></summary><div style="margin-top:4px;font-size:11px;color:var(--text-muted);max-height:180px;overflow-y:auto;line-height:1.6">${escapeHtml(full)}</div></details>`,
             true);
         })() : ''}
       </div>
