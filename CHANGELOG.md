@@ -2,6 +2,20 @@
 
 Все значимые изменения проекта. Формат — Keep a Changelog + SemVer.
 
+## 3.0.3 — 2026-07-14
+
+**Complete iRidium hide** — забыл 3 плитки в v3.0.1.
+
+### Fixed
+- При `iridium_disabled=true` скрываются ВСЕ 5 iRidium-плиток (было 2):
+  - `#tile-iridium-service` (шапка)
+  - `#tile-iridium-details` (шапка)
+  - **`#tile-iridium-conn`** (Активные TCP-подключения)
+  - **`#tile-iridium-api-full`** (все данные API)
+  - **`#tile-iridium-log`** (journal 50 строк)
+
+---
+
 ## 3.0.2 — 2026-07-14
 
 **Compat fix** — работа на старом Raspbian Buster (Python 3.7).

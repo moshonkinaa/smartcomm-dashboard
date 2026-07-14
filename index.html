@@ -579,17 +579,17 @@
     </div>
   </div>
 
-  <div class="card" style="margin-bottom:12px">
+  <div class="card" id="tile-iridium-conn" style="margin-bottom:12px">
     <p class="panel-title">Активные TCP-подключения iRidium <span class="meta">ss -tnp</span></p>
     <div class="conn-list" id="iridium-conn">—</div>
   </div>
 
-  <div class="card" style="margin-bottom:12px">
+  <div class="card" id="tile-iridium-api-full" style="margin-bottom:12px">
     <p class="panel-title">iRidium · все данные API <span class="meta" id="ir-api-meta">—</span></p>
     <div id="ir-api-host" style="font-size:12.5px">—</div>
   </div>
 
-  <div class="card" style="margin-bottom:12px">
+  <div class="card" id="tile-iridium-log" style="margin-bottom:12px">
     <p class="panel-title">iRidium journal · последние 50 <span class="meta" id="ir-log-meta">—</span></p>
     <div class="log log-tall" id="iridium-log">—</div>
   </div>
@@ -1360,10 +1360,14 @@ async function loadStatus() {
     document.getElementById('platform').textContent = d.platform_name || d.host || '—';
     document.getElementById('last-update').textContent = new Date(d.ts*1000).toLocaleTimeString('ru-RU');
 
-    // v3.0.1: если iRidium disabled в настройках — скрываем tiles + не считаем его "проблемой"
+    // v3.0.1: если iRidium disabled в настройках — скрываем ВСЕ iRidium-плитки + не считаем его "проблемой"
+    // v3.0.3: добавлены 3 нижние плитки (TCP connections, API full data, journal)
     const iridiumDisabled = !!d.iridium_disabled;
-    document.getElementById('tile-iridium-service').style.display = iridiumDisabled ? 'none' : '';
-    document.getElementById('tile-iridium-details').style.display = iridiumDisabled ? 'none' : '';
+    ['tile-iridium-service','tile-iridium-details',
+     'tile-iridium-conn','tile-iridium-api-full','tile-iridium-log'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.style.display = iridiumDisabled ? 'none' : '';
+    });
 
     const irActive = d.irserver.active === 'active';
     // Status-dot — если iRidium off, ориентируемся на общий health, а не iRidium
