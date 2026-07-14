@@ -2,6 +2,23 @@
 
 Все значимые изменения проекта. Формат — Keep a Changelog + SemVer.
 
+## 3.0.1 — 2026-07-14
+
+**iRidium disable option** — контроллеры без iRidium (например home-lab на Pi3 с Basic-пакетом) больше не показывают тревожную красную плитку «iRidium мёртв».
+
+### Added
+- Настройка **`iridium_disabled`** в `/api/iridium/settings` (bool, default false).
+- Чекбокс **«iRidium на этом контроллере не установлен»** в модалке ⚙ API.
+
+### Frontend
+- Плитки `#tile-iridium-service` и `#tile-iridium-details` скрываются через `display:none` если `iridium_disabled=true`.
+- Status-dot в шапке ориентируется на общий health, а не на iRidium когда он disabled.
+
+### Context
+Развёрнут третий контроллер (Pi3 на 192.168.95.74, home-lab режим без iRidium). Дашборд отчаянно моргал красным на iRidium — теперь можно скрыть.
+
+---
+
 ## 3.0.0 — 2026-06-30
 
 **Magic milestone** — magazine с услугами достигает feature-parity с Portainer/CasaOS по диагностике + добавляет changelog preview и export. Это финальный релиз серии 2.x → 3.0.

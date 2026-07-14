@@ -104,7 +104,7 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "3.0.0"
+VERSION = "3.0.1"
 RELEASE_DATE = "2026-06-30"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # Минимальная версия клиента (PWA/cache) с которой backend ещё совместим.
@@ -1554,10 +1554,12 @@ def get_iridium_settings():
     """Tell frontend whether iRidium creds are configured (don't leak password)."""
     pw = network_bp.setting_get("iridium_password", "")
     user = network_bp.setting_get("iridium_username", "admin")
+    disabled = network_bp.setting_get("iridium_disabled", "0") == "1"
     return jsonify({
         "configured": bool(pw),
         "username": user or "admin",
         "password_set": bool(pw),
+        "disabled": disabled,
     })
 
 
@@ -1570,6 +1572,10 @@ def put_iridium_settings():
         network_bp.setting_set("iridium_password", d["password"] or "")
     if "username" in d:
         network_bp.setting_set("iridium_username", d["username"] or "admin")
+    if "disabled" in d:
+        # bool или "1"/"0" — сохраняем строкой для совместимости с settings
+        val = "1" if (d["disabled"] is True or str(d["disabled"]) in ("1", "true")) else "0"
+        network_bp.setting_set("iridium_disabled", val)
     # Drop cached cookie so next API call re-logs in with new creds
     with _IR_SESSION["lock"]:
         _IR_SESSION["cookie"] = None
@@ -1688,6 +1694,7 @@ def api_status():
         "iridium_log": f_ilog.result(),
         "iridium_log_meta": f_ilog_meta.result(),
         "iridium_info": iridium_info(irsrv["pid"]),
+        "iridium_disabled": network_bp.setting_get("iridium_disabled", "0") == "1",
         "health": f_health.result(),
         "argon_installed": f_argon_in.result(),
     })
