@@ -104,7 +104,7 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "3.0.1"
+VERSION = "3.0.2"
 RELEASE_DATE = "2026-06-30"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # Минимальная версия клиента (PWA/cache) с которой backend ещё совместим.
@@ -2421,7 +2421,11 @@ def _apply_update(tarball_url, to_version):
             req.add_header("User-Agent", "smartcomm-dashboard/" + VERSION)
             with urllib.request.urlopen(req, timeout=60) as r:
                 with open(tar_path, "wb") as f:
-                    while chunk := r.read(8192):
+                    # Не использовать walrus (:=) — Python 3.7 (Buster) не поддерживает
+                    while True:
+                        chunk = r.read(8192)
+                        if not chunk:
+                            break
                         f.write(chunk)
             # Распаковываем во временный каталог
             extract_dir = os.path.join(tmp, "extract")

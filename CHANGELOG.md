@@ -2,6 +2,21 @@
 
 Все значимые изменения проекта. Формат — Keep a Changelog + SemVer.
 
+## 3.0.2 — 2026-07-14
+
+**Compat fix** — работа на старом Raspbian Buster (Python 3.7).
+
+### Fixed
+- Убран **walrus operator (`:=`)** в `dashboard.py:2424` (update apply flow) — Python 3.7 не поддерживает. Заменён на классический `while True: chunk = r.read(); if not chunk: break`.
+
+### Context
+Развёрнут четвёртый контроллер — Raspberry Pi 4 на 192.168.23.4 с production iRidium клиента. OS: Raspbian 10 (Buster) с Python 3.7. Дашборд крашился в restart loop с `SyntaxError: invalid syntax`.
+
+### Ministry note
+Buster EOL. Долгосрочно: обновить клиентский Pi до Bookworm (стандартный dist-upgrade Buster→Bullseye→Bookworm). Пока — оставляем совместимость с Buster.
+
+---
+
 ## 3.0.1 — 2026-07-14
 
 **iRidium disable option** — контроллеры без iRidium (например home-lab на Pi3 с Basic-пакетом) больше не показывают тревожную красную плитку «iRidium мёртв».
