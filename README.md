@@ -25,6 +25,15 @@
 - Web-SSH к устройствам (через webssh на `:8022`)
 - Bulk операции, audit log правок, CSV-экспорт
 
+### Магазин сервисов (`/services`)
+- Каталог 30-50 self-hosted docker-сервисов (из [smartcomm-services-catalog](https://github.com/moshonkinaa/smartcomm-services-catalog)): AdGuard, Nextcloud, Immich, Jellyfin, Frigate, Ollama, n8n и др.
+- Установка в один клик с live-прогрессом, проверкой совместимости платформы/портов/RAM, авто-обновлением (opt-in)
+- Профили пакетов (Базовый / Стандарт / Премиум), live docker stats, заметки, uptime %
+- Удаление с подтверждением паролем
+
+### Fleet-портал (heartbeat)
+- Контроллер может слать heartbeat на [сводный портал парка](https://github.com/moshonkinaa/smartcomm-fleet) (`fleet_agent.py`): полный снапшот + приём remote-команд. Только исходящее HTTPS — проходит любой NAT. Opt-in (`fleet_enabled`), настройка в дашборде.
+
 ## Установка (свежий хост)
 
 ### На Debian 12 / Debian 13 / Ubuntu 22.04+
@@ -54,7 +63,7 @@ cd install && sudo bash install.sh
 
 ## Архитектура
 
-- **Backend**: Python 3.11+ (Flask 2.2 + Waitress 2.1 + SQLite WAL)
+- **Backend**: Python 3.7+ (Flask + Waitress + SQLite WAL) — кросс-платформа Raspbian Buster (Py3.7) → Debian 13 (Py3.13)
 - **Frontend**: Vanilla JS + Chart.js (bundled, no CDN)
 - **БД**:
   - `/var/lib/smartcomm-dashboard/inventory.db` — карта сети, события, audit
@@ -65,7 +74,7 @@ cd install && sudo bash install.sh
 
 ## Деплой обновлений
 
-В дашборде есть кнопка **«Версия 1.0.0»** в шапке → модалка с историей и кнопкой «Проверить обновления». Background-updater автоматически проверяет GitHub Releases раз в час и применяет с health-check + rollback.
+В дашборде есть кнопка **«Версия N.N.N»** в шапке → модалка с историей (из CHANGELOG) и кнопкой «Проверить обновления». Background-updater автоматически проверяет GitHub Releases раз в час и применяет с health-check + rollback. Текущая линейка — **v3.3.x** (fleet-агент, паритет метаданных, mikrotik/services в heartbeat).
 
 Для ручного деплоя — `pwsh -File deploy_dashboard.ps1` (Posh-SSH из Windows).
 
