@@ -54,6 +54,17 @@ def _heartbeat_loop(get_snapshot, get_setting, run_command):
             if not portal or not node_id or not token:
                 time.sleep(HEARTBEAT_SEC)
                 continue
+            # SECURITY (C2): только HTTPS. По http токен узла (X-Node-Token) ушёл бы
+            # открытым текстом, а on-path атакующий мог бы подменить ответ портала и
+            # навязать команды агенту (командный канал доверяет транспорту). Localhost
+            # разрешаем для отладки. Иначе — цикл простаивает, ничего не шлём.
+            _low = portal.lower()
+            if not (_low.startswith("https://")
+                    or _low.startswith("http://127.0.0.1")
+                    or _low.startswith("http://localhost")):
+                _STATE["last_error"] = "portal_url must be https:// — heartbeat skipped"
+                time.sleep(HEARTBEAT_SEC)
+                continue
 
             _STATE["last_attempt"] = int(time.time())
             headers = {"X-Node-Id": node_id, "X-Node-Token": token}

@@ -104,9 +104,45 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "3.3.2"
-RELEASE_DATE = "2026-06-30"
+VERSION = "3.4.0"
+RELEASE_DATE = "2026-07-16"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
+# SECURITY: допустимый идентификатор сервиса (идёт в filesystem-путь + docker compose).
+_SERVICE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+
+# ---- Rate-limit логина (per-IP лок-аут, in-memory). Раньше неудачи только
+# логировались (audit) без throttle — онлайн-перебор был практичен. ----
+_LOGIN_FAILS = {}
+_LOGIN_LOCK = threading.Lock()
+_LOGIN_MAX = 8
+_LOGIN_WINDOW = 300
+_LOGIN_LOCKOUT = 300
+
+
+def _login_locked(ip):
+    now = int(time.time())
+    with _LOGIN_LOCK:
+        rec = _LOGIN_FAILS.get(ip)
+        return (rec[2] - now) if (rec and rec[2] > now) else 0
+
+
+def _login_note_fail(ip):
+    now = int(time.time())
+    with _LOGIN_LOCK:
+        if len(_LOGIN_FAILS) > 5000:
+            _LOGIN_FAILS.clear()
+        rec = _LOGIN_FAILS.get(ip)
+        if not rec or now - rec[1] > _LOGIN_WINDOW:
+            rec = [0, now, 0]
+        rec[0] += 1
+        if rec[0] >= _LOGIN_MAX:
+            rec[2] = now + _LOGIN_LOCKOUT
+        _LOGIN_FAILS[ip] = rec
+
+
+def _login_note_ok(ip):
+    with _LOGIN_LOCK:
+        _LOGIN_FAILS.pop(ip, None)
 # Минимальная версия клиента (PWA/cache) с которой backend ещё совместим.
 # Если HTML/JS клиента старше — попросим hard refresh. Обычно = текущая VERSION,
 # но если изменения косметические/back-compat — можно занизить.
@@ -1915,12 +1951,18 @@ def api_auth_login():
     username = (d.get("username") or "").strip().lower()
     password = d.get("password") or ""
     ip = _client_ip()
+    locked = _login_locked(ip)
+    if locked:
+        return jsonify({"ok": False,
+                        "error": f"Слишком много попыток, подождите {locked} сек"}), 429
     user = network_bp.auth_get_user(username)
     if not user or not network_bp.auth_verify_password(
             password, user["salt"], user["password_hash"]):
+        _login_note_fail(ip)
         network_bp.auth_log(username or None, ip, "login_failed",
                             details={"username_tried": username}, result="fail")
         return jsonify({"ok": False, "error": "Неверный логин или пароль"}), 401
+    _login_note_ok(ip)
     sid = network_bp.auth_create_session(
         username, ip, request.headers.get("User-Agent", "")[:200]
     )
@@ -2753,15 +2795,29 @@ def _fleet_run_command(command, params):
         return True, "reboot scheduled"
     if command == "restart-service":
         sid = params.get("service_id")
-        if not sid:
-            return False, "no service_id"
+        # SECURITY (M5): sid идёт в filesystem-путь (_service_dir) и docker compose.
+        # Портал не должен уметь диктовать произвольный путь/имя — валидируем строго.
+        if not isinstance(sid, str) or not _SERVICE_ID_RE.match(sid):
+            return False, "invalid service_id"
         ok, msg = services_mod.service_action(sid, "restart")
         return ok, str(msg)[:300]
     if command == "update":
-        # Применить обновление дашборда (тот же путь что кнопка «Обновить»)
+        # SECURITY (C1): НЕ доверяем tarball_url/to_version из команды портала —
+        # иначе скомпрометированный/подделанный портал скармливает произвольный
+        # tarball → RCE→root на контроллере. Обновляемся ТОЛЬКО по нашему же
+        # доверенному пути: сами тянем последний релиз с закреплённого GitHub-репо
+        # (_check_github_release), и только если версия РЕАЛЬНО новее (монотонность
+        # закрывает и downgrade-атаку). params игнорируются полностью.
         try:
-            ok, msg = _apply_update(params.get("tarball_url", ""),
-                                    params.get("to_version", ""))
+            info = _check_github_release()
+            if not info.get("ok"):
+                return False, f"update check: {info.get('error')}"[:300]
+            if not info.get("has_update"):
+                return True, "обновлений нет (уже последняя версия)"
+            ok, msg = _apply_update(info["tarball_url"], info["latest_version"])
+            if ok:
+                subprocess.Popen(
+                    "sleep 2 && sudo systemctl restart smartcomm-dashboard", shell=True)
             return ok, str(msg)[:300]
         except Exception as e:
             return False, f"update error: {e}"[:300]

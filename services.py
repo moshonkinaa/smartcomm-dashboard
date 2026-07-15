@@ -1063,7 +1063,10 @@ def service_action(service_id, action):
     if action not in ("start", "stop", "restart", "logs"):
         return False, f"unknown action: {action}"
 
-    sdir = _service_dir(service_id)
+    try:
+        sdir = _service_dir(service_id)
+    except ValueError as e:
+        return False, str(e)
     compose_path = sdir / "compose.yml"
     if not compose_path.exists():
         return False, f"compose.yml не найден: {compose_path}"
@@ -1637,7 +1640,15 @@ def _progress_reset_log(service_id):
             _PROGRESS[service_id]["error"] = None
 
 
+_SERVICE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+
+
 def _service_dir(service_id):
+    # SECURITY (M5): service_id идёт в filesystem-путь и `docker compose -f`.
+    # Валидируем строго — иначе значение вроде "../.." или абсолютный путь
+    # (pathlib '/' с абсолютным операндом заменяет базу) выводит за DATA_BASE.
+    if not isinstance(service_id, str) or not _SERVICE_ID_RE.match(service_id):
+        raise ValueError(f"invalid service_id: {service_id!r}")
     return DATA_BASE / service_id
 
 

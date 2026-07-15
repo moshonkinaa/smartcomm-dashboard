@@ -2,6 +2,30 @@
 
 Все значимые изменения проекта. Формат — Keep a Changelog + SemVer.
 
+## 3.4.0 — 2026-07-16
+
+**SECURITY** — комплексный аудит всего кода под новую модель угроз (контроллеры больше не только за MikroTik: подключены к интернет-порталу мониторинга). Мульти-агентный аудит backend/frontend/command-exec/secrets. Задеплоено на Cubi (production) с бэкапом+верификацией.
+
+### Security — Critical / High
+- **Fleet-команда `update` больше не доверяет `tarball_url`/`to_version` от портала** (`_fleet_run_command`). Раньше скомпрометированный/подделанный портал одним ответом на heartbeat скармливал агенту произвольный tarball → RCE→root на контроллере. Теперь агент обновляется ТОЛЬКО сам, тянет последний релиз с закреплённого GitHub-репо (`_check_github_release`) и применяет лишь если версия реально новее (закрыт и downgrade). Это главный вектор эскалации «интернет-портал → все контроллеры».
+- **`/api/network/devices` больше не отдаёт секреты устройств** (`network.py list_devices`). Bulk-список возвращал `login`/`password`/`snmp_community` открытым текстом любому аутентифицированному (в т.ч. non-admin client), в обход admin-gated `/credentials`. Теперь только флаги `has_credentials`/`has_snmp`; сами секреты — только через admin-эндпоинт.
+- **Fleet-агент требует HTTPS** для `fleet_portal_url` (`fleet_agent.py`). По http токен узла ушёл бы открытым текстом, а on-path атакующий мог бы подменить команды. Localhost разрешён для отладки.
+
+### Security — Medium / hardening
+- **`restart-service` валидирует `service_id`** (regex `^[a-z0-9][a-z0-9_-]{0,63}$`) и в `_fleet_run_command`, и в корне `services._service_dir` — закрыт path-traversal в `docker compose -f <path>`.
+- **Rate-limit логина** (`/api/auth/login`) — per-IP лок-аут (8 неудач / 5 мин → блок 5 мин). Раньше только аудит-лог без throttle.
+- **XSS-хардеринг фронтенда**: `escapeJs()` для значений в inline-`onclick` (username, `t.key`, service id/name — HTML-escape там обходится через HTML-декодирование атрибута до парсинга JS); `safeUrl()` режет `javascript:`/`data:`-схемы в href/`window.open`; `safeColor()` санирует `p.color` из каталога в `style=""`; экранирование `p.icon`.
+- **Секреты at-rest (H3)**: `UMask=0077` в systemd-юните + `chmod 700/600` на `inventory.db`/`metrics.db`/`backups` в `install.sh` — БД с учётками устройств и паролями MikroTik/iRidium больше не world-readable (была 0644).
+- `.gitignore` расширен: `*.db`, `*.env`, `*.key`, `*.pem`, ключи — никогда в git.
+
+### Проверено — ОК (без изменений)
+- Снапшот heartbeat **чист от паролей** (проверены `build_status_payload`/`_fleet_snapshot`/`mt_status_snapshot`/`services.counts`): пароли устройств, MikroTik, iRidium и node-токен в снапшот не попадают.
+- SQL-инъекции — всё параметризовано. Shell-инъекции (snmp/nmap/ping/docker/systemctl) — list-form argv, RCE из v3.2.0 подтверждённо закрыта. YAML — `safe_load`. Update-tarball — path-traversal guard корректен.
+
+### Известный техдолг (в отчёте)
+- `NOPASSWD: ALL` sudo (H4) — сужение ограничено (docker-сокет = root); основной вектор (update-RCE) закрыт. Полное сужение — отдельной задачей.
+- Шифрование секрет-колонок в БД at-rest; смена команд-канала на подпись (Ed25519/HMAC); ротация захардкоженных паролей в `deploy_dashboard.ps1`/`setup_mikrotik_ssh.sh` (workstation-скрипты, вне git).
+
 ## 3.3.2 — 2026-07-15
 
 **Fleet-паритет** — heartbeat-снапшот теперь несёт данные MikroTik и магазина сервисов, чтобы detail-экран сводного портала показывал те же панели, что и локальный дашборд.

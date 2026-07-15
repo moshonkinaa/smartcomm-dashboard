@@ -28,3 +28,17 @@ desktop.ini
 # Backup
 *.bak
 *.orig
+
+# SECURITY: секреты и БД — никогда в git
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+.env
+*.env
+*.key
+*.pem
+id_ed25519*
+id_rsa*
+*.ppk

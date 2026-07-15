@@ -94,6 +94,11 @@ echo "[2/6] sudoers — NOPASSWD для $SVC_USER (нужно для systemctl/s
 SUDOERS_FILE="/etc/sudoers.d/smartcomm-dashboard"
 cat > "$SUDOERS_FILE" <<EOF
 # Автогенерация smartcomm-dashboard installer
+# SECURITY (H4, техдолг): NOPASSWD: ALL — широкий blast-radius. Практический выигрыш
+# от сужения ограничен (сервису нужен доступ к docker-сокету = root-эквивалент,
+# reboot, systemctl). Основной вектор эксплуатации (произвольный код через
+# fleet-команду update) закрыт в v3.4.0 (агент игнорирует tarball_url портала).
+# TODO: сузить до конкретных бинарей после аудита всех sudo-вызовов на каждой платформе.
 $SVC_USER ALL=(ALL) NOPASSWD: ALL
 EOF
 chmod 0440 "$SUDOERS_FILE"
@@ -105,7 +110,12 @@ echo "[3/6] Каталоги"
 mkdir -p "$APP_DIR"
 mkdir -p "$DATA_DIR/photos" "$DATA_DIR/backups"
 chown -R "$SVC_USER:$SVC_GROUP" "$DATA_DIR"
-echo "  $APP_DIR + $DATA_DIR готовы"
+# SECURITY (H3): БД содержит секреты (учётки устройств, пароли MikroTik/iRidium)
+# открытым текстом — каталог и бэкапы не должны быть доступны другим локальным
+# пользователям. UMask=0077 в юните даёт 0600 на новые файлы; здесь фиксируем dir.
+chmod 700 "$DATA_DIR" "$DATA_DIR/backups"
+chmod 600 "$DATA_DIR"/*.db "$DATA_DIR"/*.db-* "$DATA_DIR"/backups/* 2>/dev/null || true
+echo "  $APP_DIR + $DATA_DIR готовы (perms 700/600)"
 
 # ===== 4. Копирование файлов =====
 echo ""

@@ -829,6 +829,11 @@ function escapeJs(s) {
       : '\\u' + h.toString(16).padStart(4, '0');
   });
 }
+// SECURITY: пропускаем только http(s)/относительные URL — режем javascript:/data:.
+function safeUrl(u) {
+  u = (u == null ? '' : String(u));
+  return /^\s*(https?:\/\/|\/|#|\.\/|\.\.\/)/i.test(u) ? u : '#';
+}
 function fmtAge(ts) {
   if (!ts) return '—';
   const age = Math.floor(Date.now()/1000 - ts);
@@ -1158,12 +1163,12 @@ function detailHtml(d) {
         </div>
         <div style="margin-top: 14px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
           <button class="btn primary" onclick="event.stopPropagation();saveDevice(${d.id})">💾 Сохранить</button>
-          ${url ? `<button class="btn" onclick="event.stopPropagation();window.open('${escapeJs(url)}', '_blank')">↗ Открыть веб-UI</button>` : ''}
+          ${url ? `<button class="btn" onclick="event.stopPropagation();window.open('${escapeJs(safeUrl(url))}', '_blank', 'noopener')">↗ Открыть веб-UI</button>` : ''}
           ${d.ip ? `<button class="btn" onclick="event.stopPropagation();openWebSSH(${d.id}, '${escapeJs(d.ip)}')" title="Открыть SSH-терминал в браузере (пароль из credentials)">🖥 Терминал</button>` : ''}
           ${d.ip ? `<button class="btn" onclick="event.stopPropagation();copySSH('${escapeJs(d.ip)}')" title="Скопировать команду ssh">📋 SSH cmd</button>` : ''}
           <button class="btn" id="ping-btn-${d.id}" onclick="event.stopPropagation();pingDevice(${d.id})">📡 Ping сейчас</button>
           <button class="btn" id="fp-btn-${d.id}" onclick="event.stopPropagation();fingerprintDevice(${d.id})">🔬 Опросить службы</button>
-          ${(d.device_type === 'network' || d.snmp_community) ? `<button class="btn" id="snmp-btn-${d.id}" onclick="event.stopPropagation();snmpProbe(${d.id})">📊 SNMP опрос</button>` : ''}
+          ${(d.device_type === 'network' || d.has_snmp) ? `<button class="btn" id="snmp-btn-${d.id}" onclick="event.stopPropagation();snmpProbe(${d.id})">📊 SNMP опрос</button>` : ''}
           <button class="btn danger" onclick="event.stopPropagation();deleteDevice(${d.id})">🗑 Удалить</button>
           <span id="ping-result-${d.id}"></span>
         </div>
@@ -1861,9 +1866,9 @@ function renderTypesList() {
     <div style="display:flex;gap:6px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)">
       <span class="mono" style="width:90px;color:var(--text-muted)">${escapeHtml(t.key)}</span>
       <input type="text" value="${escapeHtml(t.label)}" id="tl-${t.key}" style="flex:1">
-      <button class="icon-btn" onclick="renameType('${escapeHtml(t.key)}')">✓</button>
+      <button class="icon-btn" onclick="renameType('${escapeJs(t.key)}')">✓</button>
       ${t.is_builtin ? '<span class="pill" style="opacity:0.5">встроенный</span>'
-                    : `<button class="icon-btn" onclick="deleteType('${escapeHtml(t.key)}')" style="color:var(--err)">🗑</button>`}
+                    : `<button class="icon-btn" onclick="deleteType('${escapeJs(t.key)}')" style="color:var(--err)">🗑</button>`}
     </div>
   `).join('');
 }

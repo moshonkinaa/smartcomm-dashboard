@@ -281,6 +281,18 @@ function escapeHtml(s) {
   if (s == null) return '';
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
+// SECURITY: для значения ВНУТРИ инлайнового JS (onclick="f('...')"). HTML-escape
+// тут не годится — браузер декодирует атрибут ДО парсинга JS. Кодируем в \xHH.
+function escapeJs(s) {
+  return (s == null ? '' : String(s)).replace(/[^a-zA-Z0-9_-]/g, c => '\\x' + c.charCodeAt(0).toString(16).padStart(2, '0'));
+}
+// SECURITY: p.color из каталога (полу-доверенный GitHub) шёл в style="..." сырьём —
+// значение вроде `x">…<img onerror>` ломало атрибут/тег. Пропускаем только
+// валидный CSS-цвет (#hex, rgb()/hsl(), var(--..), имя); иначе '' → сработает fallback.
+function safeColor(c) {
+  c = (c == null ? '' : String(c)).trim();
+  return /^(#[0-9a-fA-F]{3,8}|rgb[a]?\([0-9.,%\s/]+\)|hsl[a]?\([0-9.,%\s/deg]+\)|var\(--[a-zA-Z0-9-]+\)|[a-zA-Z]{1,20})$/.test(c) ? c : '';
+}
 
 function showToast(msg, isErr) {
   const t = document.getElementById('toast');
@@ -778,7 +790,7 @@ function renderInstalledActions(svc) {
     parts.push(`<button class="btn-action c-green" onclick="serviceAction('${escapeHtml(svc.id)}','start',this)" aria-label="Запустить сервис">▶ Запустить</button>`);
   }
   parts.push(`<button class="btn-action c-blue" onclick="updateService('${escapeHtml(svc.id)}')" aria-label="Обновить образ сервиса">⬆ Обновить</button>`);
-  parts.push(`<button class="btn-action c-red" onclick="uninstallService('${escapeHtml(svc.id)}', ${JSON.stringify(svc.name)})" aria-label="Удалить сервис">🗑 Удалить</button>`);
+  parts.push(`<button class="btn-action c-red" onclick="uninstallService('${escapeJs(svc.id)}', '${escapeJs(svc.name)}')" aria-label="Удалить сервис">🗑 Удалить</button>`);
   return parts.join('');
 }
 
@@ -1323,16 +1335,16 @@ function profileCard(p) {
   const total = p._total_services;
   const pct = total > 0 ? Math.round(installed * 100 / total) : 0;
   return `
-    <div class="card" style="border-color: ${p.color || 'var(--border)'}; cursor: default;">
+    <div class="card" style="border-color: ${safeColor(p.color) ||'var(--border)'}; cursor: default;">
       <div class="card-head">
-        <div class="card-icon" style="background: ${p.color || 'var(--bg-inner)'}33; border-color: ${p.color || 'var(--border)'};">${p.icon || '📦'}</div>
+        <div class="card-icon" style="background: ${safeColor(p.color) ||'var(--bg-inner)'}33; border-color: ${safeColor(p.color) ||'var(--border)'};">${escapeHtml(p.icon || '📦')}</div>
         <div class="card-title-block">
           <p class="card-name">${escapeHtml(p.name)}</p>
           <p class="card-tag">${escapeHtml(p.tagline || '')}</p>
         </div>
       </div>
       <div style="margin: 8px 0; height: 6px; background: var(--bg-inner); border-radius: 3px; overflow: hidden;">
-        <div style="width: ${pct}%; height: 100%; background: ${p.color || 'var(--ok)'}; transition: width 0.3s;"></div>
+        <div style="width: ${pct}%; height: 100%; background: ${safeColor(p.color) ||'var(--ok)'}; transition: width 0.3s;"></div>
       </div>
       <p style="margin: 4px 0 8px; font-size: 11.5px; color: var(--text-muted);">
         ${installed}/${total} установлено · ${pct}%
@@ -1348,7 +1360,7 @@ function profileCard(p) {
         <button class="btn-action" style="flex:1" onclick="showProfileDetails('${escapeHtml(p.id)}')">📋 Подробнее</button>
         ${ready
           ? '<button class="btn-action" style="flex:1;color:var(--ok);border-color:rgba(29,158,117,0.4)" disabled>✓ Готов</button>'
-          : `<button class="btn-primary" style="flex:1;background:${p.color || 'var(--accent)'};border-color:${p.color || 'var(--accent)'}" onclick="installProfile('${escapeHtml(p.id)}')">Установить пакет</button>`
+          : `<button class="btn-primary" style="flex:1;background:${safeColor(p.color) ||'var(--accent)'};border-color:${safeColor(p.color) ||'var(--accent)'}" onclick="installProfile('${escapeHtml(p.id)}')">Установить пакет</button>`
         }
       </div>
     </div>`;
@@ -1377,7 +1389,7 @@ async function showProfileDetails(profileId) {
     const body = document.getElementById('svc-modal-body');
     body.innerHTML = `
       <div class="modal-head">
-        <div class="modal-icon" style="background:${p.color}33;border-color:${p.color}">${p.icon || '📦'}</div>
+        <div class="modal-icon" style="background:${safeColor(p.color)||'var(--bg-inner)'}33;border-color:${safeColor(p.color)||'var(--border)'}">${escapeHtml(p.icon || '📦')}</div>
         <div style="flex:1">
           <h2 class="modal-title">Пакет «${escapeHtml(p.name)}»</h2>
           <p class="modal-tag">${escapeHtml(p.tagline || '')}</p>

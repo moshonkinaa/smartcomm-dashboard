@@ -1625,6 +1625,18 @@ function escapeHtml(s) {
   // а на 0 старое (s||'') теряло значение. null/undefined → ''.
   return (s == null ? '' : String(s)).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
+// SECURITY: для значения ВНУТРИ инлайнового JS (onclick="f('...')"). HTML-escape
+// тут недостаточен — браузер декодирует атрибут ДО парсинга JS, и &#39; снова
+// станет ' и разорвёт строку. Кодируем всё не-alnum в \xHH.
+function escapeJs(s) {
+  return (s == null ? '' : String(s)).replace(/[^a-zA-Z0-9_-]/g, c => '\\x' + c.charCodeAt(0).toString(16).padStart(2, '0'));
+}
+// SECURITY: пропускаем в href/window.open только http(s)/относительные URL —
+// режем javascript:/data:/vbscript: и прочие script-схемы.
+function safeUrl(u) {
+  u = (u == null ? '' : String(u));
+  return /^\s*(https?:\/\/|\/|#|\.\/|\.\.\/)/i.test(u) ? u : '#';
+}
 
 function showToast(msg, isErr) {
   const t = document.getElementById('toast');
@@ -2099,9 +2111,9 @@ async function usersLoad() {
         <td style="color:var(--text-dim);font-size:11px">${u.created_at ? new Date(u.created_at*1000).toLocaleString('ru-RU') : '—'}</td>
         <td style="color:var(--text-dim);font-size:11px">${u.last_login ? new Date(u.last_login*1000).toLocaleString('ru-RU') : 'никогда'}</td>
         <td>
-          <button class="tile-btn" onclick="usersResetPw(${u.id}, '${escapeAttr(u.username)}')" title="Сбросить пароль">🔑</button>
+          <button class="tile-btn" onclick="usersResetPw(${u.id}, '${escapeJs(u.username)}')" title="Сбросить пароль">🔑</button>
           ${u.username === _me?.username ? '<span style="color:var(--text-dim);font-size:11px;margin-left:6px">(вы)</span>' :
-           '<button class="tile-btn danger" onclick="usersDelete(' + u.id + ', \'' + escapeAttr(u.username) + '\')" title="Удалить">🗑</button>'}
+           '<button class="tile-btn danger" onclick="usersDelete(' + u.id + ', \'' + escapeJs(u.username) + '\')" title="Удалить">🗑</button>'}
         </td>
       </tr>`).join('');
   } catch (e) {
@@ -2377,7 +2389,7 @@ async function loadMonitored() {
       const sub = [d.room, d.vendor].filter(Boolean).join(' · ');
       const statusColor = online ? 'var(--ok)' : 'var(--err)';
       const statusVerb  = online ? 'онлайн с' : 'офлайн с';
-      const urlLink = d.url ? '<a href="' + escapeAttr(d.url) + '" target="_blank" style="color:var(--accent);text-decoration:none;margin-left:4px">↗</a>' : '';
+      const urlLink = d.url ? '<a href="' + escapeAttr(safeUrl(d.url)) + '" target="_blank" rel="noopener noreferrer" style="color:var(--accent);text-decoration:none;margin-left:4px">↗</a>' : '';
       return `<div class="monitored-tile ${klass}">
         <p class="name" title="${escapeAttr(displayName)}">${escapeHtml(displayName)}${urlLink}</p>
         <p class="sub">${escapeHtml(sub || d.ip || '')}</p>

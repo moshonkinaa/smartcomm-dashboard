@@ -1201,6 +1201,15 @@ def list_devices():
         d = row_to_dict(r)
         d["timeline_24h"] = timelines.get(d["id"], [])
         d["photos"] = photos_by_dev.get(d["id"], [])
+        # SECURITY (H1): bulk-список НЕ должен отдавать секреты. Раньше SELECT *
+        # включал login/password/snmp_community открытым текстом → любой
+        # аутентифицированный (в т.ч. non-admin client) читал пароли всех устройств,
+        # минуя admin-gated /credentials. Отдаём только флаги наличия; сами секреты —
+        # только через отдельный admin-gated эндпоинт /credentials.
+        d["has_credentials"] = bool(d.get("login") or d.get("password"))
+        d["has_snmp"] = bool(d.get("snmp_community"))
+        for _secret in ("login", "password", "snmp_community"):
+            d.pop(_secret, None)
         devices.append(d)
     return jsonify({
         "devices": devices,

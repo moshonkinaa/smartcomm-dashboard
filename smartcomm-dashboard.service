@@ -21,6 +21,10 @@ ExecStart=/usr/bin/python3 /opt/smartcomm-dashboard/dashboard.py
 Restart=always
 RestartSec=5
 StateDirectory=smartcomm-dashboard
+# SECURITY (H3): создаём файлы с umask 0077 — inventory.db/metrics.db и бэкапы
+# содержат учётки устройств + пароли MikroTik/iRidium открытым текстом, они не
+# должны быть world-readable (0644). С 0077 SQLite создаёт БД как 0600.
+UMask=0077
 StandardOutput=journal
 StandardError=journal
 
