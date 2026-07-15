@@ -104,7 +104,7 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "3.3.0"
+VERSION = "3.3.2"
 RELEASE_DATE = "2026-06-30"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # Минимальная версия клиента (PWA/cache) с которой backend ещё совместим.
@@ -573,6 +573,21 @@ def primary_iface():
     except OSError:
         pass
     return "eth0"
+
+
+def primary_ip():
+    """Основной локальный IP (по маршруту наружу). None при ошибке.
+    Используется в снапшоте для fleet-портала (метаданные узла)."""
+    import socket
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))   # маршрут выбирается, пакеты не шлются
+            return s.getsockname()[0]
+        finally:
+            s.close()
+    except OSError:
+        return None
 
 
 def net_rate(iface=None):
@@ -1742,8 +1757,10 @@ def build_status_payload():
     irsrv = f_irsrv.result()
     return {
         "ts": int(time.time()),
+        "version": VERSION,
         "host": os.uname().nodename,
         "platform_name": platform_name(),
+        "platform_arch": os.uname().machine,
         "system": {
             "uptime": uptime_sec(),
             "uptime_fmt": fmt_uptime(uptime_sec()),
@@ -1762,6 +1779,7 @@ def build_status_payload():
         "throttle": {"raw": throt_raw, "flags": throt},
         "net": {
             "iface": primary_iface(),
+            "ip": primary_ip(),
             "rx_rate": rx_rate, "tx_rate": tx_rate,
             "rx_total": rx_total, "tx_total": tx_total,
         },
@@ -2750,10 +2768,27 @@ def _fleet_run_command(command, params):
     return False, f"unknown command: {command}"
 
 
+def _fleet_snapshot():
+    """Снапшот для fleet-портала: базовый /api/status + mikrotik + services.
+    Эти два блока добавляются ТОЛЬКО в heartbeat (не в живой /api/status),
+    чтобы detail-экран портала имел паритет с дашбордом без лишней нагрузки
+    на роутер при частом polling /api/status."""
+    snap = build_status_payload()
+    try:
+        snap["mikrotik"] = mt.mt_status_snapshot(network_bp)
+    except Exception:
+        snap["mikrotik"] = {"configured": False}
+    try:
+        snap["services"] = services_mod.counts()
+    except Exception:
+        snap["services"] = None
+    return snap
+
+
 try:
     import fleet_agent
     fleet_agent.ensure_started(
-        get_snapshot=build_status_payload,
+        get_snapshot=_fleet_snapshot,
         get_setting=lambda k, d="": network_bp.setting_get(k, d),
         run_command=_fleet_run_command,
     )
