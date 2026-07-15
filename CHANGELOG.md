@@ -2,6 +2,25 @@
 
 Все значимые изменения проекта. Формат — Keep a Changelog + SemVer.
 
+## 3.3.0 — 2026-07-15
+
+**Fleet-агент** — контроллер может слать heartbeat на сводный портал парка (SmartComm Fleet). По умолчанию ВЫКЛЮЧЕН (opt-in).
+
+### Added
+- **`fleet_agent.py`** — фоновый heartbeat-клиент. Раз в 60с собирает полный status-снапшот и шлёт POST на fleet-портал (только исходящее соединение → проходит любой NAT). В ответ получает очередь команд, выполняет, репортит результат.
+- **Command-executor** (`_fleet_run_command`) — whitelist команд от портала: restart-iridium, start/stop-iridium, restart-dashboard, reboot, restart-service, update. Портал не может запустить произвольное.
+- **`GET/PUT /api/fleet/settings`** (admin) — настройка подключения к порталу: portal_url, node_id, token, enabled.
+- **`build_status_payload()`** — сборка status-снапшота вынесена из `api_status()` в отдельную функцию (переиспользуется агентом и HTTP-endpoint'ом).
+
+### Architecture
+Push-heartbeat + command-queue (паттерн Portainer Edge / Beszel). Портал за белым IP, контроллеры за клиентским NAT шлют только исходящие HTTPS. Detail-экран портала = рендер того же дашборда из снапшота. Backend портала (Postgres + Flask) протестирован end-to-end: heartbeat → БД, command-queue доставка/репорт, токен-аутентификация.
+
+### Notes
+- Агент дремлет пока `fleet_enabled != 1`. Активация — после настройки внешнего доступа к порталу.
+- Токен per-node (портал хранит sha256).
+
+---
+
 ## 3.2.1 — 2026-07-15
 
 **dmesg noise filter** — добавлены безобидные firmware/BT сообщения Raspberry Pi.

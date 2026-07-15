@@ -104,7 +104,7 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "3.2.1"
+VERSION = "3.3.0"
 RELEASE_DATE = "2026-06-30"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # Минимальная версия клиента (PWA/cache) с которой backend ещё совместим.
@@ -1597,6 +1597,37 @@ def marked_js():
     return send_from_directory(BASE, "marked.min.js")
 
 
+@app.route("/api/fleet/settings", methods=["GET"])
+@requires_admin
+def get_fleet_settings():
+    """Настройки fleet-агента (токен не отдаём — только флаг что задан)."""
+    return jsonify({
+        "enabled": network_bp.setting_get("fleet_enabled", "0") == "1",
+        "portal_url": network_bp.setting_get("fleet_portal_url", ""),
+        "node_id": network_bp.setting_get("fleet_node_id", ""),
+        "token_set": bool(network_bp.setting_get("fleet_token", "")),
+        "agent": fleet_agent.agent_state() if 'fleet_agent' in globals() else {},
+    })
+
+
+@app.route("/api/fleet/settings", methods=["PUT"])
+@requires_admin
+@audit_action("fleet_settings_changed", target_from_path=True)
+def put_fleet_settings():
+    """Задать подключение к сводному порталу."""
+    d = request.get_json(force=True, silent=True) or {}
+    if "portal_url" in d:
+        network_bp.setting_set("fleet_portal_url", (d["portal_url"] or "").rstrip("/"))
+    if "node_id" in d:
+        network_bp.setting_set("fleet_node_id", d["node_id"] or "")
+    if "token" in d and d["token"]:
+        network_bp.setting_set("fleet_token", d["token"])
+    if "enabled" in d:
+        network_bp.setting_set("fleet_enabled",
+                               "1" if (d["enabled"] is True or str(d["enabled"]) in ("1", "true")) else "0")
+    return jsonify({"ok": True})
+
+
 @app.route("/api/iridium/settings", methods=["GET"])
 def get_iridium_settings():
     """Tell frontend whether iRidium creds are configured (don't leak password)."""
@@ -1690,8 +1721,9 @@ def chart_js():
     return send_from_directory(BASE, "chart.min.js")
 
 
-@app.route("/api/status")
-def api_status():
+def build_status_payload():
+    """Собирает полный status-снапшот как dict. Используется и /api/status
+    (через jsonify), и fleet-агентом (push на портал) — единый источник данных."""
     # Fan out independent slow subprocess calls in parallel.
     # Light/local calls (mem_info, disk_info, cpu_usage_pct, vcgencmd…)
     # stay sequential — they touch /proc and complete in <2 ms each.
@@ -1708,7 +1740,7 @@ def api_status():
     rx_rate, tx_rate, rx_total, tx_total = net_rate()
     throt_raw, throt = throttled()
     irsrv = f_irsrv.result()
-    return jsonify({
+    return {
         "ts": int(time.time()),
         "host": os.uname().nodename,
         "platform_name": platform_name(),
@@ -1745,7 +1777,12 @@ def api_status():
         "iridium_disabled": network_bp.setting_get("iridium_disabled", "0") == "1",
         "health": f_health.result(),
         "argon_installed": f_argon_in.result(),
-    })
+    }
+
+
+@app.route("/api/status")
+def api_status():
+    return jsonify(build_status_payload())
 
 
 @app.route("/api/history")
@@ -2668,6 +2705,61 @@ try:
     services_mod.ensure_auto_updater_started()
 except Exception as e:
     print(f"[services] init warn: {e}")
+
+
+# ============ Fleet-агент (heartbeat на сводный портал) ============
+
+def _fleet_run_command(command, params):
+    """Исполнитель команд от fleet-портала. Возвращает (ok, result).
+    Разрешён только whitelist команд — портал не может запустить произвольное."""
+    params = params or {}
+    if command == "restart-iridium":
+        r = subprocess.run("sudo systemctl restart irserver", shell=True,
+                           capture_output=True, text=True, timeout=30)
+        return r.returncode == 0, (r.stderr or "restarted")[:300]
+    if command == "start-iridium":
+        r = subprocess.run("sudo systemctl start irserver", shell=True,
+                           capture_output=True, text=True, timeout=30)
+        return r.returncode == 0, (r.stderr or "started")[:300]
+    if command == "stop-iridium":
+        r = subprocess.run("sudo systemctl stop irserver", shell=True,
+                           capture_output=True, text=True, timeout=30)
+        return r.returncode == 0, (r.stderr or "stopped")[:300]
+    if command == "restart-dashboard":
+        # Отложенный рестарт — иначе оборвём текущий ответ
+        subprocess.Popen("sleep 2 && sudo systemctl restart smartcomm-dashboard",
+                         shell=True)
+        return True, "restart scheduled"
+    if command == "reboot":
+        subprocess.Popen("sleep 3 && sudo reboot", shell=True)
+        return True, "reboot scheduled"
+    if command == "restart-service":
+        sid = params.get("service_id")
+        if not sid:
+            return False, "no service_id"
+        ok, msg = services_mod.service_action(sid, "restart")
+        return ok, str(msg)[:300]
+    if command == "update":
+        # Применить обновление дашборда (тот же путь что кнопка «Обновить»)
+        try:
+            ok, msg = _apply_update(params.get("tarball_url", ""),
+                                    params.get("to_version", ""))
+            return ok, str(msg)[:300]
+        except Exception as e:
+            return False, f"update error: {e}"[:300]
+    return False, f"unknown command: {command}"
+
+
+try:
+    import fleet_agent
+    fleet_agent.ensure_started(
+        get_snapshot=build_status_payload,
+        get_setting=lambda k, d="": network_bp.setting_get(k, d),
+        run_command=_fleet_run_command,
+    )
+    print("[fleet] heartbeat-агент запущен")
+except Exception as e:
+    print(f"[fleet] агент init warn: {e}")
 
 
 if __name__ == "__main__":
