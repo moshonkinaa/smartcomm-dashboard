@@ -32,10 +32,12 @@ def _get_session():
 
 
 def _client_ip():
-    """X-Forwarded-For-aware client IP."""
-    xff = request.headers.get("X-Forwarded-For", "")
-    if xff:
-        return xff.split(",")[0].strip()
+    """Реальный client-IP. SECURITY: НЕ доверяем X-Forwarded-For — дашборд слушает
+    напрямую (waitress 0.0.0.0:8080, БЕЗ trusted_proxy), реверс-прокси перед ним нет,
+    поэтому XFF = произвольный ввод атакующего. Раньше XFF использовался как ключ
+    лок-аута логина и IP в аудите → атакующий менял XFF каждый запрос и обходил
+    rate-limit + отравлял аудит. Берём только remote_addr. Если позже появится
+    доверенный прокси — настроить waitress trusted_proxy и вернуть XFF-разбор."""
     return request.remote_addr or "?"
 
 
@@ -104,8 +106,8 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "3.4.0"
-RELEASE_DATE = "2026-07-16"
+VERSION = "3.4.1"
+RELEASE_DATE = "2026-07-17"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # SECURITY: допустимый идентификатор сервиса (идёт в filesystem-путь + docker compose).
 _SERVICE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
@@ -245,9 +247,19 @@ def time_cache(ttl_sec):
     return decorator
 
 
+# SECURITY: заголовки defense-in-depth (дашборд рендерит данные из сканируемой LAN —
+# hostname/DHCP-comment/SNMP sysDescr/nmap product; сейчас всё экранируется, но CSP —
+# второй эшелон, а X-Frame-Options режет кликджекинг над admin-gated секретами).
+# Инлайновые <script>/<style> → script/style с 'unsafe-inline'.
+_CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+        "connect-src 'self'; font-src 'self' data:; base-uri 'self'; "
+        "form-action 'self'; frame-ancestors 'none'")
+
+
 @app.after_request
 def cache_headers(resp):
-    """Long cache for static JS/CSS, no-cache for HTML and API."""
+    """Long cache for static JS/CSS, no-cache for HTML and API + security headers."""
     p = request.path or ""
     if p.endswith(".js") or p.endswith(".css") or p.endswith(".png") or p.endswith(".ico"):
         resp.headers["Cache-Control"] = "public, max-age=86400, immutable"
@@ -255,6 +267,10 @@ def cache_headers(resp):
         resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         resp.headers["Pragma"] = "no-cache"
         resp.headers["Expires"] = "0"
+    resp.headers.setdefault("Content-Security-Policy", _CSP)
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("Referrer-Policy", "no-referrer")
     return resp
 
 def _mkbuf(n):
@@ -2023,8 +2039,8 @@ def api_auth_change_password():
                             "change_password", result="fail",
                             details={"reason": "wrong current password"})
         return jsonify({"ok": False, "error": "Неверный текущий пароль"}), 400
-    if len(new_pw) < 4:
-        return jsonify({"ok": False, "error": "Минимум 4 символа"}), 400
+    if len(new_pw) < 8:
+        return jsonify({"ok": False, "error": "Минимум 8 символов"}), 400
     network_bp.auth_set_password(sess["username"], new_pw, clear_must_change=True)
     network_bp.auth_log(sess["username"], _client_ip(),
                         "change_password", result="success")
@@ -2046,8 +2062,8 @@ def api_auth_users_create():
     is_admin = bool(d.get("is_admin"))
     if not username or not re.match(r"^[a-z0-9_-]{2,32}$", username):
         return jsonify({"ok": False, "error": "Имя: 2-32 символа a-z 0-9 _ -"}), 400
-    if len(password) < 4:
-        return jsonify({"ok": False, "error": "Пароль минимум 4 символа"}), 400
+    if len(password) < 8:
+        return jsonify({"ok": False, "error": "Пароль минимум 8 символов"}), 400
     if network_bp.auth_get_user(username):
         return jsonify({"ok": False, "error": "Уже существует"}), 400
     network_bp.auth_create_user(username, password, is_admin=is_admin)
@@ -2074,8 +2090,8 @@ def api_auth_users_reset_password(uid):
     """Админ сбрасывает пароль другому юзеру (без знания старого)."""
     d = request.get_json(force=True, silent=True) or {}
     new_pw = d.get("new_password") or ""
-    if len(new_pw) < 4:
-        return jsonify({"ok": False, "error": "Минимум 4 символа"}), 400
+    if len(new_pw) < 8:
+        return jsonify({"ok": False, "error": "Минимум 8 символов"}), 400
     with network_bp.db() as c:
         row = c.execute("SELECT username FROM auth_users WHERE id=?",
                         (uid,)).fetchone()

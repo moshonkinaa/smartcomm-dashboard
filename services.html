@@ -293,6 +293,12 @@ function safeColor(c) {
   c = (c == null ? '' : String(c)).trim();
   return /^(#[0-9a-fA-F]{3,8}|rgb[a]?\([0-9.,%\s/]+\)|hsl[a]?\([0-9.,%\s/deg]+\)|var\(--[a-zA-Z0-9-]+\)|[a-zA-Z]{1,20})$/.test(c) ? c : '';
 }
+// SECURITY: URL из каталога (полу-доверенный GitHub) — пропускаем только http(s)/относительные,
+// режем javascript:/data:. escapeHtml не блокирует схему.
+function safeUrl(u) {
+  u = (u == null ? '' : String(u));
+  return /^\s*(https?:\/\/|\/|#|\.\/|\.\.\/)/i.test(u) ? u : '#';
+}
 
 function showToast(msg, isErr) {
   const t = document.getElementById('toast');
@@ -591,7 +597,7 @@ async function openServiceModal(id) {
       <h3>После установки</h3>
       <pre class="post-install">${escapeHtml(svc.post_install)}</pre>
     </div>` : ''}
-    ${svc.docs_url ? `<a class="docs-link" href="${escapeHtml(svc.docs_url)}" target="_blank" rel="noopener">📖 Документация ↗</a>` : ''}
+    ${svc.docs_url ? `<a class="docs-link" href="${escapeHtml(safeUrl(svc.docs_url))}" target="_blank" rel="noopener">📖 Документация ↗</a>` : ''}
     <div class="modal-actions" style="flex-wrap:wrap">
       <button class="btn-close" onclick="closeModal()">Закрыть</button>
       ${svc._installed ? renderInstalledActions(svc) : `<button class="btn-primary" id="install-btn" disabled onclick="installService('${escapeHtml(svc.id)}')">Установить</button>`}
@@ -626,7 +632,7 @@ async function loadNetworkInfo(id) {
       return `<div class="port-row">
         <span class="port-pill"><strong>${escapeHtml(p.host_port)}</strong>/${escapeHtml(p.proto)}</span>
         <span class="text-dim" style="font-size:11px">→ ${escapeHtml(p.container_port)} (${escapeHtml(p.container)})</span>
-        ${p.proto === 'tcp' ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener" class="text-muted" style="font-size:11px;text-decoration:none">↗ открыть</a>` : ''}
+        ${p.proto === 'tcp' ? `<a href="${escapeHtml(safeUrl(url))}" target="_blank" rel="noopener" class="text-muted" style="font-size:11px;text-decoration:none">↗ открыть</a>` : ''}
       </div>`;
     }).join('');
     const containers = (j.containers || []).map(c => `<code class="port-pill">${escapeHtml(c)}</code>`).join(' ');
@@ -838,7 +844,7 @@ async function showChangelogPreview(id) {
             <span class="text-dim" style="float:right;font-size:11px">${date}</span>
           </summary>
           <div class="release-body">${body_html}</div>
-          ${rel.url ? `<a href="${escapeHtml(rel.url)}" target="_blank" rel="noopener" class="text-muted" style="font-size:11px">↗ открыть на GitHub</a>` : ''}
+          ${rel.url ? `<a href="${escapeHtml(safeUrl(rel.url))}" target="_blank" rel="noopener" class="text-muted" style="font-size:11px">↗ открыть на GitHub</a>` : ''}
         </details>`;
       }).join('');
       body.innerHTML = `
@@ -1417,7 +1423,7 @@ async function showProfileDetails(profileId) {
         <button class="btn-close" onclick="closeModal()">Закрыть</button>
         ${p._ready
           ? '<button class="btn-primary" disabled>✓ Уже установлен</button>'
-          : `<button class="btn-primary" style="background:${p.color};border-color:${p.color}" onclick="installProfile('${escapeHtml(p.id)}')">Установить пакет</button>`
+          : `<button class="btn-primary" style="background:${safeColor(p.color)||'var(--accent)'};border-color:${safeColor(p.color)||'var(--accent)'}" onclick="installProfile('${escapeJs(p.id)}')">Установить пакет</button>`
         }
       </div>`;
     document.getElementById('svc-modal').classList.add('show');

@@ -86,6 +86,13 @@
   if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
 })();
 
+// SECURITY: open-redirect. Пропускаем ТОЛЬКО локальный путь (один ведущий '/',
+// не '//host' и не '/\\host'), иначе ?next=//evil.com увёл бы оператора после входа.
+function safeNext() {
+  const n = new URLSearchParams(location.search).get('next') || '/';
+  return (/^\/[^/\\]/.test(n) || n === '/') ? n : '/';
+}
+
 // Если уже залогинены — редирект на главную
 fetch('/api/auth/me').then(r => r.json()).then(j => {
   if (j.authenticated) {
@@ -118,7 +125,7 @@ async function doLogin(e) {
     });
     const j = await r.json();
     if (j.ok) {
-      const next = new URLSearchParams(location.search).get('next') || '/';
+      const next = safeNext();
       if (j.must_change_password) {
         sessionStorage.setItem('sc_force_pw_change', '1');
       }

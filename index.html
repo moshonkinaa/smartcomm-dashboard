@@ -28,6 +28,7 @@
     --ok: #1D9E75;
     --warn: #EF9F27;
     --err: #E24B4A;
+    --info: #378ADD;
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
   @media (prefers-color-scheme: dark) {
@@ -44,18 +45,19 @@
       --ok: #4ec894;
       --warn: #f2b04e;
       --err: #ff6b6b;
+      --info: #6da8ff;
     }
   }
   /* Explicit theme overrides via data-theme="light|dark" on <html> */
   html[data-theme="light"] {
     --bg: #ffffff; --bg-card: #f7f8fa; --bg-inner: #ffffff; --bg-hover: #eef0f4;
     --border: #e3e6ec; --text: #1a1f2c; --text-muted: #6a7383; --text-dim: #9aa1ad;
-    --accent: #1f3a68; --ok: #1D9E75; --warn: #EF9F27; --err: #E24B4A;
+    --accent: #1f3a68; --ok: #1D9E75; --warn: #EF9F27; --err: #E24B4A; --info: #378ADD;
   }
   html[data-theme="dark"] {
     --bg: #0e1116; --bg-card: #181c24; --bg-inner: #11141b; --bg-hover: #232833;
     --border: #2a3140; --text: #e6eaf2; --text-muted: #9aa3b0; --text-dim: #707582;
-    --accent: #6da8ff; --ok: #4ec894; --warn: #f2b04e; --err: #ff6b6b;
+    --accent: #6da8ff; --ok: #4ec894; --warn: #f2b04e; --err: #ff6b6b; --info: #6da8ff;
   }
   /* Tile criticality — coloured outline when something's wrong */
   .card.crit-warn { box-shadow: inset 0 0 0 2px rgba(239,159,39,0.55); }

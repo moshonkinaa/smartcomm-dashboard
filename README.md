@@ -59,7 +59,7 @@ cd install && sudo bash install.sh
 
 ### Зависимости (apt)
 
-`python3-flask`, `python3-flask-compress`, `python3-waitress`, `nmap`, `snmp`, `avahi-utils`, `mmc-utils`, `iputils-ping`, `curl`
+`python3-flask`, `python3-flask-compress`, `python3-waitress`, `python3-yaml`, `nmap`, `snmp`, `avahi-utils`, `mmc-utils`, `smartmontools`, `sqlite3`, `iputils-ping`, `curl`, `git`
 
 ## Архитектура
 
@@ -74,7 +74,7 @@ cd install && sudo bash install.sh
 
 ## Деплой обновлений
 
-В дашборде есть кнопка **«Версия N.N.N»** в шапке → модалка с историей (из CHANGELOG) и кнопкой «Проверить обновления». Background-updater автоматически проверяет GitHub Releases раз в час и применяет с health-check + rollback. Текущая линейка — **v3.3.x** (fleet-агент, паритет метаданных, mikrotik/services в heartbeat).
+В дашборде есть кнопка **«Версия N.N.N»** в шапке → модалка с историей (из CHANGELOG) и кнопкой «Проверить обновления». Background-updater автоматически проверяет GitHub Releases раз в час и применяет с health-check + rollback. Текущая линейка — **v3.4.x** (security-хардеринг под internet-exposed модель угроз: агент не доверяет `tarball_url` портала, bulk-список без секретов, HTTPS-enforce у агента, rate-limit логина по `remote_addr`, security-заголовки/CSP, `chmod 600` на БД, мин. пароль 8).
 
 Для ручного деплоя — `pwsh -File deploy_dashboard.ps1` (Posh-SSH из Windows).
 

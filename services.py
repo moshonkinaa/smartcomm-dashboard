@@ -1640,7 +1640,7 @@ def _progress_reset_log(service_id):
             _PROGRESS[service_id]["error"] = None
 
 
-_SERVICE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+_SERVICE_ID_RE = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,63}\Z")  # \A\Z: $ матчит и перед \n
 
 
 def _service_dir(service_id):

@@ -43,7 +43,7 @@ if ! id "$SVC_USER" >/dev/null 2>&1; then
   exit 1
 fi
 
-REQUIRED_FILES=(dashboard.py network.py mikrotik.py services.py index.html network.html services.html login.html chart.min.js manifest.json sw.js smartcomm-dashboard.service)
+REQUIRED_FILES=(dashboard.py network.py mikrotik.py services.py fleet_agent.py index.html network.html services.html login.html chart.min.js manifest.json sw.js smartcomm-dashboard.service)
 OPTIONAL_FILES=(CHANGELOG.md marked.min.js)
 for f in "${REQUIRED_FILES[@]}"; do
   if [ ! -f "$SRC_DIR/$f" ]; then

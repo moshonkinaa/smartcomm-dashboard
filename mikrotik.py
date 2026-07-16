@@ -396,7 +396,7 @@ def mt_sample_and_store(network_bp):
     res = mt_resource(network_bp)
     if not res:
         return
-    cpu = int(res.get("cpu-load", 0))
+    cpu = _safe_int(res.get("cpu-load", 0))  # RouterOS может отдать ""/"5%"/"0.5" → не ронять весь тик
     wan = mt_wan_iface(network_bp)
     rates = mt_traffic_rates(network_bp)   # ← обновляет _TRAFFIC_PREV
     wan_rate = rates.get(wan, {}) if wan else {}

@@ -2,6 +2,23 @@
 
 Все значимые изменения проекта. Формат — Keep a Changelog + SemVer.
 
+## 3.4.1 — 2026-07-17
+
+**Аудит всего кода (5 агентов) → фиксы.** Все security-фиксы 3.4.0 подтверждены на месте; новые находки исправлены.
+
+### Security
+- **HIGH: обход rate-limit логина через `X-Forwarded-For`.** `_client_ip()` слепо доверял XFF, а trusted-proxy нет (waitress напрямую) → атакующий менял XFF каждый запрос, лок-аут не наступал + подделка IP в аудите. Теперь берём только `request.remote_addr`.
+- **Security-заголовки** на контроллере (`after_request`): CSP, X-Frame-Options: DENY, X-Content-Type-Options: nosniff, Referrer-Policy — defense-in-depth (раньше были только на портале).
+- Минимальная длина пароля 4 → **8** (change-password, reset, login-set).
+- Open-redirect в `login.html`: `?next=` теперь пропускает только локальный путь.
+- XSS-хардеринг `services.html`: `safeColor` для `p.color` в модалке «Подробнее» (был сырой), `safeUrl` для href из каталога (docs_url/web_url/rel.url), `escapeJs` для id.
+- `_SERVICE_ID_RE`: `\A…\Z` вместо `^…$` (Python `$` матчил хвостовой `\n`).
+
+### Fixed
+- **`install.sh` не копировал `fleet_agent.py`** → на свежей установке heartbeat молча не работал. Добавлен в REQUIRED_FILES.
+- `index.html`: не определённая CSS-переменная `--info` (все ссылки рендерились цветом текста, не синим) — добавлена во все 4 блока темы.
+- `mikrotik.py` sampler: `int()` → `_safe_int` на `cpu-load` (RouterOS мог отдать `""`/`"5%"` → тик sampler'а глох).
+
 ## 3.4.0 — 2026-07-16
 
 **SECURITY** — комплексный аудит всего кода под новую модель угроз (контроллеры больше не только за MikroTik: подключены к интернет-порталу мониторинга). Мульти-агентный аудит backend/frontend/command-exec/secrets. Задеплоено на Cubi (production) с бэкапом+верификацией.
