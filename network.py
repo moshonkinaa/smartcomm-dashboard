@@ -1343,7 +1343,10 @@ def bulk_update():
 @bp.route("/api/network/devices/<int:did>/events", methods=["GET"])
 def device_events(did):
     """List events + uptime summary for a device over the last N days."""
-    days = int(request.args.get("days", "30"))
+    try:
+        days = int(request.args.get("days", "30"))
+    except (ValueError, TypeError):
+        return jsonify({"ok": False, "error": "bad days"}), 400
     days = max(1, min(days, RETENTION_EVENT_DAYS))
     since = int(time.time()) - days * 86400
     with db() as c:
@@ -1640,7 +1643,10 @@ def get_first_photo(did):
 
 @bp.route("/api/network/devices/<int:did>/audit", methods=["GET"])
 def device_audit(did):
-    limit = max(1, min(int(request.args.get("limit", "50")), 200))
+    try:
+        limit = max(1, min(int(request.args.get("limit", "50")), 200))
+    except (ValueError, TypeError):
+        return jsonify({"ok": False, "error": "bad limit"}), 400
     with db() as c:
         rows = c.execute("""
             SELECT id, ts, actor, action, details FROM device_audit

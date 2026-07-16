@@ -911,7 +911,7 @@ function render() {
                 ? '<span class="pill" style="background:rgba(154,161,173,0.15);color:var(--text-muted);border-color:transparent">dynamic</span>'
                 : '<span style="color:var(--text-dim)">—</span>'}</td>
         <td class="mono">${d.mac ? escapeHtml(d.mac) + (d.vendor ? ' · ' + escapeHtml(d.vendor) : '') : '<span style="color:var(--text-dim)">—</span>'}</td>
-        <td><span class="pill ${t}">${TYPE_LABEL[t] || t}</span></td>
+        <td><span class="pill ${escapeHtml(t)}">${escapeHtml(TYPE_LABEL[t] || t)}</span></td>
         <td>${escapeHtml(d.room || '—')}</td>
         <td>
           ${online ? '<span class="pill ok">онлайн</span>' : '<span class="pill off">офлайн ' + fmtAge(d.last_seen) + '</span>'}
@@ -1287,7 +1287,7 @@ async function fetchAudit(deviceId) {
       }
       return `<div class="audit-row">
         <span class="when">${when}</span>
-        <span class="act">${act}</span>
+        <span class="act">${escapeHtml(act)}</span>
         <span class="det">${escapeHtml(det)}</span>
       </div>`;
     }).join('');
@@ -1500,16 +1500,6 @@ function renderDeviceHistory(id, j) {
       }).join('') + '</div>';
   }
   host.innerHTML = summary + list;
-}
-
-function togglePwd(id) {
-  const inp = document.getElementById('ef-pwd-' + id);
-  inp.type = inp.type === 'password' ? 'text' : 'password';
-}
-function copyPwd(id) {
-  const v = document.getElementById('ef-pwd-' + id).value;
-  if (!v) return showToast('пароль пуст', true);
-  navigator.clipboard.writeText(v).then(() => showToast('пароль скопирован'));
 }
 
 async function saveDevice(id) {

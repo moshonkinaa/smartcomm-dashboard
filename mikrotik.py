@@ -58,8 +58,7 @@ def _safe_int(v, default=0):
     except (ValueError, TypeError):
         try:
             # На случай '12.5' или '53C' — берём ведущее число
-            import re as _re
-            m = _re.match(r"-?\d+", str(v).strip())
+            m = re.match(r"-?\d+", str(v).strip())
             return int(m.group(0)) if m else default
         except Exception:
             return default

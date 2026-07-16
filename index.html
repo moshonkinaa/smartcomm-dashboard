@@ -1533,7 +1533,7 @@ async function loadStatus() {
     const conns = d.iridium_conn;
     document.getElementById('iridium-conn').innerHTML = conns.length === 0
       ? '<div style="color:var(--text-dim)">нет активных подключений</div>'
-      : conns.map(c => `<div>${escapeHtml(c.local)} ← ${escapeHtml(c.peer)} <span style="color:var(--text-dim)">[${c.state}]</span></div>`).join('');
+      : conns.map(c => `<div>${escapeHtml(c.local)} ← ${escapeHtml(c.peer)} <span style="color:var(--text-dim)">[${escapeHtml(c.state)}]</span></div>`).join('');
 
     document.getElementById('iridium-log').innerHTML = d.iridium_log.length === 0
       ? '<div style="color:var(--text-dim)">—</div>'
@@ -1948,8 +1948,11 @@ function renderMarkdown(md) {
   html = html.replace(/`([^`]+)`/g, '<code style="background:var(--bg-hover);padding:1px 5px;border-radius:3px;font-family:var(--mono);font-size:11.5px">$1</code>');
   // Bold
   html = html.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
-  // Links [text](url)
-  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" style="color:var(--info);text-decoration:none">$1</a>');
+  // Links [text](url) — только http(s)/относительные, кавычки в URL экранируем
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (m, txt, u) => {
+    const safe = /^(https?:\/\/|\/|#)/i.test(u) ? u : '#';
+    return '<a href="' + safe.replace(/"/g, '%22') + '" target="_blank" style="color:var(--info);text-decoration:none">' + txt + '</a>';
+  });
   // Списки -
   html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
   // Группируем последовательные <li> в <ul>

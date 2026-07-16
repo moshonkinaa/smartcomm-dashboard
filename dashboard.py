@@ -106,7 +106,7 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "3.4.1"
+VERSION = "3.4.2"
 RELEASE_DATE = "2026-07-17"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # SECURITY: допустимый идентификатор сервиса (идёт в filesystem-путь + docker compose).
@@ -132,7 +132,11 @@ def _login_note_fail(ip):
     now = int(time.time())
     with _LOGIN_LOCK:
         if len(_LOGIN_FAILS) > 5000:
-            _LOGIN_FAILS.clear()
+            # чистим только протухшие (окно прошло И лок-аут снят) — не сбрасываем
+            # активные блокировки (иначе атакующий переполнением снимал бы лок-аут)
+            for k in [k for k, v in _LOGIN_FAILS.items()
+                      if v[2] <= now and now - v[1] > _LOGIN_WINDOW]:
+                del _LOGIN_FAILS[k]
         rec = _LOGIN_FAILS.get(ip)
         if not rec or now - rec[1] > _LOGIN_WINDOW:
             rec = [0, now, 0]
@@ -181,6 +185,10 @@ _ADMIN_ONLY_RULES = [
     # (метод-множество, скомпилированный regex по request.path)
     ({"POST", "PUT", "DELETE", "PATCH"}, _re_admin.compile(r"^/api/network/")),
     ({"GET"}, _re_admin.compile(r"^/api/network/devices/\d+/credentials$")),
+    # SECURITY (F2): история правок устройства содержит открытое значение login
+    # (username устройства) → admin-only, как и credentials/export (иначе non-admin
+    # клиент читал бы логины устройств в обход H1-фикса bulk-списка).
+    ({"GET"}, _re_admin.compile(r"^/api/network/devices/\d+/audit$")),
     ({"GET"}, _re_admin.compile(r"^/api/network/export\.csv$")),
     ({"POST", "PUT", "DELETE", "PATCH"}, _re_admin.compile(r"^/api/services/")),
     ({"POST", "PUT", "DELETE"}, _re_admin.compile(r"^/api/mikrotik/")),
@@ -287,6 +295,9 @@ def _mkbuf(n):
 HISTORY_1H  = _mkbuf(60)    # 60 × 60s = 1 hour
 HISTORY_24H = _mkbuf(288)   # 288 × 5min = 24 hours
 LOCK = threading.Lock()
+# SECURITY/robustness (F5): PREV_* читаются/пишутся из sampler-потока И из
+# build_status_payload/api_history одновременно → без лока изредка неверные rate.
+_METRIC_LOCK = threading.Lock()
 PREV_CPU = None
 PREV_CPU_CORES = {}
 PREV_NET = {"rx": 0, "tx": 0, "ts": time.time()}
@@ -524,13 +535,14 @@ def cpu_usage_pct():
             parts = list(map(int, f.readline().split()[1:8]))
         total = sum(parts)
         idle = parts[3] + parts[4]
-        if PREV_CPU:
-            dt = total - PREV_CPU[0]
-            di = idle - PREV_CPU[1]
-            pct = round(100 * (dt - di) / dt, 1) if dt else 0
-        else:
-            pct = 0
-        PREV_CPU = (total, idle)
+        with _METRIC_LOCK:
+            if PREV_CPU:
+                dt = total - PREV_CPU[0]
+                di = idle - PREV_CPU[1]
+                pct = round(100 * (dt - di) / dt, 1) if dt else 0
+            else:
+                pct = 0
+            PREV_CPU = (total, idle)
         return pct
     except Exception:
         return 0
@@ -549,14 +561,15 @@ def cpu_usage_per_core():
                 vals = list(map(int, parts[1:8]))
                 total = sum(vals)
                 idle = vals[3] + vals[4]
-                prev = PREV_CPU_CORES.get(name)
-                if prev:
-                    dt = total - prev[0]
-                    di = idle - prev[1]
-                    pct = round(100 * (dt - di) / dt, 1) if dt else 0
-                else:
-                    pct = 0
-                PREV_CPU_CORES[name] = (total, idle)
+                with _METRIC_LOCK:
+                    prev = PREV_CPU_CORES.get(name)
+                    if prev:
+                        dt = total - prev[0]
+                        di = idle - prev[1]
+                        pct = round(100 * (dt - di) / dt, 1) if dt else 0
+                    else:
+                        pct = 0
+                    PREV_CPU_CORES[name] = (total, idle)
                 result.append(pct)
     except Exception:
         pass
@@ -654,12 +667,13 @@ def net_rate(iface=None):
                     fields = lhs[1].split()
                     rx, tx = int(fields[0]), int(fields[8])
                     now = time.time()
-                    dt = max(0.5, now - PREV_NET["ts"])
-                    drx = max(0, rx - PREV_NET["rx"])
-                    dtx = max(0, tx - PREV_NET["tx"])
-                    rx_rate = int(drx / dt)
-                    tx_rate = int(dtx / dt)
-                    PREV_NET = {"rx": rx, "tx": tx, "ts": now}
+                    with _METRIC_LOCK:
+                        dt = max(0.5, now - PREV_NET["ts"])
+                        drx = max(0, rx - PREV_NET["rx"])
+                        dtx = max(0, tx - PREV_NET["tx"])
+                        rx_rate = int(drx / dt)
+                        tx_rate = int(dtx / dt)
+                        PREV_NET = {"rx": rx, "tx": tx, "ts": now}
                     return rx_rate, tx_rate, rx, tx
     except Exception:
         pass
@@ -917,15 +931,21 @@ def iridium_version():
     Кешируем ТОЛЬКО успешный результат вручную — раньше был @lru_cache, который
     навсегда кешировал None если при первом вызове irserver был недоступен
     (таймаут/перезапуск), и версия iRidium пропадала до рестарта дашборда."""
-    if _IRIDIUM_VERSION_CACHE["value"] is not None:
-        return _IRIDIUM_VERSION_CACHE["value"]
+    c = _IRIDIUM_VERSION_CACHE
+    if c["value"] is not None:
+        return c["value"]
+    # PERF (F8): неудачу кешируем НА КОРОТКО (45с), а не навсегда. Иначе, пока
+    # irserver недоступен/перезапускается, `sudo IR_BIN --version` (timeout 10с)
+    # дёргался на КАЖДЫЙ /api/status и heartbeat → подвисания. Успех — навсегда.
+    if c.get("retry_after", 0) > time.time():
+        return None
     out = sh(f"sudo {IR_BIN} --version 2>&1 | head -1", timeout=10)
     m = re.search(r"Server Version:\s*(.+?):(\d+)\s*\(([^)]+)\)", out)
     if m:
-        result = {"edition": m.group(1).strip(), "build": m.group(2), "date": m.group(3)}
-        _IRIDIUM_VERSION_CACHE["value"] = result
-        return result
-    return None   # не кешируем неудачу — попробуем снова при след. вызове
+        c["value"] = {"edition": m.group(1).strip(), "build": m.group(2), "date": m.group(3)}
+        return c["value"]
+    c["retry_after"] = time.time() + 45
+    return None
 
 
 @time_cache(60)
@@ -1779,7 +1799,6 @@ def api_mikrotik_history():
 @audit_action("mikrotik_sync", target_from_path=True)
 def api_mikrotik_sync():
     """Синхронизируем DHCP comments → имена устройств. Override always."""
-    network_bp.DB_PATH = network_bp.DB_PATH  # noqa - убедиться что атрибут есть
     return jsonify(mt.sync_dhcp_to_inventory(network_bp))
 
 
@@ -2109,12 +2128,15 @@ def api_auth_users_reset_password(uid):
 @app.route("/api/auth/audit", methods=["GET"])
 @requires_admin
 def api_auth_audit():
-    limit = max(1, min(int(request.args.get("limit", "200")), 1000))
-    offset = max(0, int(request.args.get("offset", "0")))
-    since_ts = request.args.get("since")
-    since_ts = int(since_ts) if since_ts else None
-    to_ts = request.args.get("to")
-    to_ts = int(to_ts) if to_ts else None
+    try:
+        limit = max(1, min(int(request.args.get("limit", "200")), 1000))
+        offset = max(0, int(request.args.get("offset", "0")))
+        since_ts = request.args.get("since")
+        since_ts = int(since_ts) if since_ts else None
+        to_ts = request.args.get("to")
+        to_ts = int(to_ts) if to_ts else None
+    except (ValueError, TypeError):
+        return jsonify({"ok": False, "error": "bad numeric filter"}), 400
     username = request.args.get("username")
     action = request.args.get("action")        # partial match (LIKE %X%)
     result = request.args.get("result")        # "success" | "fail"
@@ -2272,6 +2294,14 @@ def api_services_logs(service_id):
     return jsonify({"ok": ok, "logs": msg if ok else "", "error": msg if not ok else None})
 
 
+# RELIABILITY (F7): каждый открытый SSE-стрим держит 1 из 16 потоков waitress
+# навсегда. Без лимита аутентифицированный клиент открыл бы 16 стримов → дашборд
+# перестаёт отвечать. Ограничиваем число одновременных live-tail потоков.
+_SSE_MAX = 4
+_SSE_ACTIVE = [0]
+_SSE_LOCK = threading.Lock()
+
+
 @app.route("/api/services/<service_id>/logs/stream")
 @requires_auth
 def api_services_logs_stream(service_id):
@@ -2288,9 +2318,21 @@ def api_services_logs_stream(service_id):
     # Limit since на максимум 6h чтобы не было загрузки 100MB логов на старте
     if since not in ("5m", "15m", "30m", "1h", "3h", "6h"):
         since = "30m"
+    with _SSE_LOCK:
+        if _SSE_ACTIVE[0] >= _SSE_MAX:
+            return jsonify({"ok": False, "error": "слишком много live-стримов, закройте лишние"}), 503
+        _SSE_ACTIVE[0] += 1
     gen = services_mod.stream_logs(service_id, since=since, level=level)
+
+    def _guarded():
+        try:
+            for chunk in gen:
+                yield chunk
+        finally:
+            with _SSE_LOCK:
+                _SSE_ACTIVE[0] = max(0, _SSE_ACTIVE[0] - 1)
     # SSE response — text/event-stream + no-cache + no-buffer
-    return Response(gen, mimetype="text/event-stream", headers={
+    return Response(_guarded(), mimetype="text/event-stream", headers={
         "Cache-Control": "no-cache",
         "X-Accel-Buffering": "no",   # для nginx если будет reverse-proxy
     })
