@@ -14,11 +14,8 @@
   /* Дизайн-токены (CSS-переменные) вынесены в /tokens.css. */
   /* Btn-action style — синхронизировано с дашбордом */
   .btn-action { display: inline-flex; align-items: center; gap: 8px; padding: 10px 14px; font: inherit; font-size: 13px; font-weight: 500; border-radius: 10px; cursor: pointer; border: 1px solid; background: transparent; transition: transform 0.1s, filter 0.15s; min-height: 40px; -webkit-tap-highlight-color: transparent; }
-  .btn-action:active { transform: scale(0.96); filter: brightness(1.1); }
+  /* .btn-action:active + .c-* → /components.css (var-based). База .btn-action ниже локальна. */
   .btn-action svg { width: 18px; height: 18px; stroke-width: 1.8; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; }
-  .btn-action.c-blue   { background: rgba(55,138,221,0.12); border-color: rgba(55,138,221,0.4); color: #378ADD; }
-  .btn-action.c-purple { background: rgba(127,119,221,0.14); border-color: rgba(127,119,221,0.4); color: #7F77DD; }
-  .btn-action.c-mute   { color: var(--text-muted); border-color: var(--border); }
   /* Help-модалки: collapsible sections (общий стиль с index.html) */
   .help-sect { border-bottom: 1px solid var(--border); padding: 4px 0; }
   .help-sect:last-of-type { border-bottom: none; }

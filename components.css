@@ -94,3 +94,19 @@
 
 /* ---- Modal ---- */
 .modal-box { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 20px; max-width: 640px; width: 100%; max-height: 90vh; overflow-y: auto; }
+
+/* ---- Action button: цветовые варианты (единая, тема-адаптивная система).
+   База .btn-action (геометрия) осталась на страницах — она РАЗНАЯ: index/network —
+   outline 40px, services — компактная solid. А цвета теперь общие и на var()
+   (раньше index/network держали хардкод-hex → цветные кнопки не адаптировались к
+   тёмной теме). c-amber намеренно #BA7517/#EF9F27 (var(--warn) проваливает контраст
+   на светлом фоне). ---- */
+.btn-action.c-green  { background: rgba(29,158,117,0.12); border-color: rgba(29,158,117,0.4); color: var(--ok); }
+.btn-action.c-blue   { background: rgba(55,138,221,0.12); border-color: rgba(55,138,221,0.4); color: var(--info); }
+.btn-action.c-purple { background: rgba(127,119,221,0.14); border-color: rgba(127,119,221,0.4); color: var(--purple); }
+.btn-action.c-amber  { background: rgba(239,159,39,0.13); border-color: rgba(239,159,39,0.4); color: #BA7517; }
+.btn-action.c-red    { background: rgba(226,75,74,0.12); border-color: rgba(226,75,74,0.4); color: var(--err); }
+.btn-action.c-mute   { color: var(--text-muted); border-color: var(--border); }
+@media (prefers-color-scheme: dark) { .btn-action.c-amber { color: #EF9F27; } }
+html[data-theme="dark"] .btn-action.c-amber { color: #EF9F27; }
+.btn-action:active { transform: scale(0.96); filter: brightness(1.1); }
