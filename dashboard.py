@@ -106,7 +106,7 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "3.4.3"
+VERSION = "3.4.4"
 RELEASE_DATE = "2026-07-22"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # SECURITY: допустимый идентификатор сервиса (идёт в filesystem-путь + docker compose).
@@ -2603,6 +2603,16 @@ def api_update_check():
 @requires_auth
 def api_update_state():
     """Снимок состояния updater'а — для UI."""
+    # Хвост лога верификатора (SUCCESS/ROLLED_BACK): in-memory last_apply
+    # теряется при рестарте после апдейта, поэтому исход читаем с диска.
+    verify_log = None
+    try:
+        vlog = (Path(os.environ.get("STATE_DIRECTORY",
+                "/var/lib/smartcomm-dashboard")) / "update-verify.log")
+        if vlog.exists():
+            verify_log = vlog.read_text(errors="replace").strip().splitlines()[-6:]
+    except Exception:
+        pass
     with _UPDATE_STATE["lock"]:
         return jsonify({
             "version": VERSION,
@@ -2613,16 +2623,112 @@ def api_update_state():
             "last_check": _UPDATE_STATE["last_check"],
             "last_check_result": _UPDATE_STATE["last_check_result"],
             "last_apply": _UPDATE_STATE["last_apply"],
+            "verify_log": verify_log,
         })
 
 
+def _dir_size(path):
+    """Суммарный размер файлов в каталоге (для disk-check перед апдейтом).
+    Каталог приложения маленький (исходники) — безопасно, не /var/lib/docker."""
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for fn in files:
+            try:
+                total += os.path.getsize(os.path.join(root, fn))
+            except OSError:
+                pass
+    return total
+
+
+# Пост-апдейт верификатор. Запускается как transient systemd-unit (systemd-run) —
+# в СВОЕЙ cgroup, поэтому переживает рестарт дашборда (у нашего юнита
+# KillMode=control-group убил бы обычный child при остановке). Здоровье = HTTP 200
+# на публичном /login после рестарта: это доказывает, что НОВЫЙ код реально
+# загрузился (waitress забиндилась, WSGI импортировался без исключения — при
+# syntax/import-ошибке сервис не поднимется и probe вернёт ERR). Нет здоровья за
+# таймаут → восстанавливаем бэкап и рестартим обратно на прошлую версию.
+_UPDATE_VERIFY_SH = r'''#!/bin/bash
+set +e
+EXPECTED="$1"; BACKUP="$2"; APP="$3"; SVC="$4"; RESULT="$5"
+log(){ echo "[$(date '+%F %T')] $*" >> "$RESULT" 2>/dev/null; }
+probe(){ python3 -c "import urllib.request as u;print(u.urlopen('http://127.0.0.1:8080/login',timeout=4).status)" 2>/dev/null || echo ERR; }
+: > "$RESULT" 2>/dev/null
+log "verify start: expected=$EXPECTED backup=$BACKUP app=$APP svc=$SVC"
+sleep 2
+systemctl reset-failed "$SVC" 2>/dev/null; systemctl restart "$SVC"; log "restart issued (rc=$?)"
+ok=0; ACT=""; ST=""
+for i in $(seq 1 30); do
+  sleep 2
+  ACT=$(systemctl is-active "$SVC" 2>/dev/null); ST=$(probe)
+  if [ "$ACT" = active ] && [ "$ST" = 200 ]; then ok=1; log "healthy: act=$ACT http=$ST (try $i)"; break; fi
+done
+if [ "$ok" = 1 ]; then log "RESULT=SUCCESS version=$EXPECTED"; exit 0; fi
+log "RESULT=UNHEALTHY act=$ACT http=$ST -- rollback из $BACKUP"
+if [ -n "$BACKUP" ] && [ -d "$BACKUP" ]; then
+  if cp -a "$BACKUP"/. "$APP"/; then log "backup restored"; else log "backup restore FAILED"; fi
+  # reset-failed: битый релиз мог упереться в StartLimitBurst и уйти в failed —
+  # тогда обычный restart отказал бы ("repeated too quickly"). Сбрасываем счётчик.
+  systemctl reset-failed "$SVC" 2>/dev/null; systemctl restart "$SVC"; sleep 5
+  ACT2=$(systemctl is-active "$SVC" 2>/dev/null); ST2=$(probe)
+  log "RESULT=ROLLED_BACK act=$ACT2 http=$ST2"
+else
+  log "RESULT=ROLLBACK_IMPOSSIBLE backup missing: $BACKUP"
+fi
+exit 1
+'''
+
+
+def _launch_update_verifier(expected_version, backup_path):
+    """Запуск верификатора как transient systemd-unit. Возвращает (launched, note).
+    launched=False → апдейт применён, но авто-проверки нет; делаем обычный
+    отложенный рестарт (fallback), чтобы новый код всё равно поднялся."""
+    APP = BASE
+    state = Path(os.environ.get("STATE_DIRECTORY", "/var/lib/smartcomm-dashboard"))
+    script = state / "update-verify.sh"
+    result = state / "update-verify.log"
+    note = ""
+    try:
+        with open(str(script), "w") as f:
+            f.write(_UPDATE_VERIFY_SH)
+        os.chmod(str(script), 0o755)
+        unit = "smartcomm-update-verify-%d" % int(time.time())
+        cmd = ["sudo", "systemd-run", "--collect", "--unit=" + unit,
+               "/bin/bash", str(script),
+               str(expected_version), str(backup_path or ""), str(APP),
+               "smartcomm-dashboard", str(result)]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        if r.returncode == 0:
+            return True, unit
+        note = (r.stderr or r.stdout or "systemd-run failed").strip()[:120]
+    except Exception as e:
+        note = str(e)[:120]
+    try:
+        subprocess.Popen("sleep 2 && sudo systemctl restart smartcomm-dashboard",
+                         shell=True)
+    except Exception:
+        pass
+    return False, note
+
+
 def _apply_update(tarball_url, to_version):
-    """Скачать tarball, бекапнуть текущую папку, применить, рестартануть.
-    Возвращает (ok, message)."""
-    import urllib.request, tarfile, shutil, tempfile
+    """Скачать tarball, проверить место, валидировать, бекапнуть, применить
+    атомарно по файлам. Возвращает (ok, message, backup_path|None). Рестарт и
+    health-check/rollback делает отдельный верификатор (_launch_update_verifier)."""
+    import urllib.request, tarfile, shutil, tempfile, py_compile
     APP = BASE
     BACKUP = BACKUP_DIR / f"app-pre-{VERSION}-to-{to_version}-{int(time.time())}"
     try:
+        # DISK-CHECK: до скачивания/бэкапа убедимся, что хватит места на
+        # copytree-бэкап + tarball + распаковку. Иначе полупримененный апдейт
+        # на забитой SD (частый кейс на Pi) — верный способ убить контроллер.
+        try:
+            free = shutil.disk_usage(str(APP)).free
+            need = _dir_size(str(APP)) + 50 * 1024 * 1024
+            if free < need:
+                return (False, f"мало места на диске: свободно {free // 1048576} МБ, "
+                        f"нужно ~{need // 1048576} МБ (бэкап+tarball)", None)
+        except Exception:
+            pass  # disk_usage недоступен — не блокируем апдейт
         with tempfile.TemporaryDirectory() as tmp:
             tar_path = os.path.join(tmp, "release.tar.gz")
             req = urllib.request.Request(tarball_url)
@@ -2653,13 +2759,29 @@ def _apply_update(tarball_url, to_version):
             roots = [d for d in os.listdir(extract_dir)
                      if os.path.isdir(os.path.join(extract_dir, d))]
             if not roots:
-                return False, "пустой tarball"
+                return False, "пустой tarball", None
             src_root = os.path.join(extract_dir, roots[0])
+            # ATOMICITY (pre-validate): все новые .py обязаны компилироваться ДО
+            # того как тронем живой каталог. Битый релиз (syntax error) не должен
+            # попасть в прод даже частично — иначе сервис не поднимется после
+            # рестарта. Компилируем в temp, cfile тоже в temp (не мусорим в src).
+            for fname in os.listdir(src_root):
+                if not fname.endswith(".py"):
+                    continue
+                try:
+                    py_compile.compile(os.path.join(src_root, fname),
+                                       cfile=os.path.join(tmp, fname + "c"),
+                                       doraise=True)
+                except py_compile.PyCompileError as e:
+                    return (False, f"новый релиз не компилируется ({fname}): "
+                            f"{str(e)[:120]}", None)
             # Бекап текущей папки приложения. BACKUP — всегда уникальная свежая
             # папка (см. выше, с timestamp), поэтому dirs_exist_ok не нужен —
             # он к тому же Python 3.8+, а Buster идёт с Py3.7.
             shutil.copytree(str(APP), str(BACKUP))
-            # Копируем новые файлы поверх (только .py, .html, .js, .json, .css, .md)
+            # Копируем новые файлы поверх (только .py, .html, .js, .json, .css, .md).
+            # ATOMICITY (per-file): пишем в <name>.new и os.replace — атомарная
+            # подмена на том же ФС. Обрыв в середине не оставит полуфайла.
             ext_ok = (".py", ".html", ".js", ".json", ".css", ".md", ".service",
                       ".min.js")
             copied = 0
@@ -2669,11 +2791,14 @@ def _apply_update(tarball_url, to_version):
                     continue
                 if not fname.endswith(ext_ok):
                     continue
-                shutil.copy2(src_f, str(APP / fname))
+                dst_f = str(APP / fname)
+                tmp_f = dst_f + ".new"
+                shutil.copy2(src_f, tmp_f)
+                os.replace(tmp_f, dst_f)
                 copied += 1
-            return True, f"скопировано {copied} файлов, бекап в {BACKUP}"
+            return True, f"скопировано {copied} файлов, бекап в {BACKUP}", str(BACKUP)
     except Exception as e:
-        return False, str(e)[:200]
+        return False, str(e)[:200], None
 
 
 @app.route("/api/update/apply", methods=["POST"])
@@ -2693,7 +2818,7 @@ def api_update_apply():
                 return jsonify({"ok": False, "error": info.get("error")}), 502
             if not info.get("has_update"):
                 return jsonify({"ok": False, "error": "обновлений нет"}), 200
-        ok, msg = _apply_update(info["tarball_url"], info["latest_version"])
+        ok, msg, backup = _apply_update(info["tarball_url"], info["latest_version"])
         _UPDATE_STATE["last_apply"] = {
             "ts": int(time.time()),
             "from_version": VERSION,
@@ -2703,14 +2828,18 @@ def api_update_apply():
         }
         if not ok:
             return jsonify({"ok": False, "error": msg}), 500
-        # Рестарт сервиса (асинхронно, через sleep чтобы успеть отдать response)
-        subprocess.Popen("sleep 2 && sudo systemctl restart smartcomm-dashboard",
-                         shell=True)
+        # Рестарт + health-check + авто-rollback делает верификатор в отдельной
+        # cgroup (переживает рестарт). launched=False → fallback-рестарт без
+        # авто-проверки (внутри _launch_update_verifier).
+        launched, note = _launch_update_verifier(info["latest_version"], backup)
+        verify_msg = ("рестарт + авто-проверка новой версии, при сбое — откат"
+                      if launched else f"рестарт без авто-проверки ({note})")
         return jsonify({
             "ok": True,
-            "message": f"обновлено до {info['latest_version']} — рестарт через 2 сек",
+            "message": f"обновлено до {info['latest_version']} — {verify_msg}",
             "from": VERSION,
             "to": info["latest_version"],
+            "verify": launched,
             "details": msg,
         })
     finally:
@@ -2894,10 +3023,11 @@ def _fleet_run_command(command, params):
                 return False, f"update check: {info.get('error')}"[:300]
             if not info.get("has_update"):
                 return True, "обновлений нет (уже последняя версия)"
-            ok, msg = _apply_update(info["tarball_url"], info["latest_version"])
+            ok, msg, backup = _apply_update(info["tarball_url"], info["latest_version"])
             if ok:
-                subprocess.Popen(
-                    "sleep 2 && sudo systemctl restart smartcomm-dashboard", shell=True)
+                launched, note = _launch_update_verifier(
+                    info["latest_version"], backup)
+                msg = f"{msg}; verify={'on' if launched else 'off (' + note + ')'}"
             return ok, str(msg)[:300]
         except Exception as e:
             return False, f"update error: {e}"[:300]
