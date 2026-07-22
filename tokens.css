@@ -1,0 +1,73 @@
+/* SmartComm Design System — централизованные дизайн-токены.
+   Единственный источник истины для CSS-переменных всех страниц дашборда.
+   Подключается ПЕРВЫМ в <head> (до инлайн-<style>):
+     <link rel="stylesheet" href="/tokens.css">
+
+   Значения выверены 1:1 с живым кодом index.html / network.html / services.html /
+   login.html (в т.ч. dark --purple = #a0a0ff, как в коде — НЕ #9a92f0 из чернового
+   хендоффа). Здесь ТОЛЬКО переменные — никаких element/reset-правил, чтобы
+   централизация ничего не меняла визуально. Раскладка тем: авто по
+   prefers-color-scheme + явный тумблер через html[data-theme]. */
+
+:root {
+  /* ---- Поверхности (light) ---- */
+  --bg: #ffffff;         /* фон страницы */
+  --bg-card: #f7f8fa;    /* карточка / шапка / модалка */
+  --bg-inner: #ffffff;   /* вложенная поверхность: инпуты, суб-блоки, тайлы */
+  --bg-hover: #eef0f4;   /* hover-заливка нейтральных контролов */
+
+  /* ---- Линии и текст (light) ---- */
+  --border: #e3e6ec;     /* hairline-разделители и бордеры контролов */
+  --text: #1a1f2c;       /* основной текст */
+  --text-muted: #6a7383; /* лейблы, вторичный текст */
+  --text-dim: #9aa1ad;   /* метаданные, таймстампы, плейсхолдеры */
+
+  /* ---- Бренд и статусы (light) ---- */
+  --accent: #1f3a68;     /* SmartComm navy — бренд / CTA */
+  --ok: #1D9E75;         /* ok / online / success */
+  --warn: #EF9F27;       /* warning / degraded */
+  --err: #E24B4A;        /* error / offline / danger */
+  --info: #378ADD;       /* инфо / ссылки / вторичные действия */
+  --purple: #7F77DD;     /* акцент категории «сеть» */
+
+  /* ---- Радиусы ---- */
+  --r-sm: 6px;   /* пилюли, мелкие кнопки, теги */
+  --r-md: 9px;   /* кнопки, инпуты */
+  --r-lg: 14px;  /* карточки, модалки, шапка */
+
+  /* ---- Шрифт для чисел/IP/версий/логов ---- */
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* ---- Тёмная тема: авто (по системе) ---- */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e1116;
+    --bg-card: #181c24;
+    --bg-inner: #11141b;
+    --bg-hover: #232833;
+    --border: #2a3140;
+    --text: #e6eaf2;
+    --text-muted: #9aa3b0;
+    --text-dim: #707582;
+    --accent: #6da8ff;
+    --ok: #4ec894;
+    --warn: #f2b04e;
+    --err: #ff6b6b;
+    --info: #6da8ff;
+    --purple: #a0a0ff;
+  }
+}
+
+/* ---- Явный тумблер темы через html[data-theme] (перебивает системную) ---- */
+html[data-theme="light"] {
+  --bg: #ffffff; --bg-card: #f7f8fa; --bg-inner: #ffffff; --bg-hover: #eef0f4;
+  --border: #e3e6ec; --text: #1a1f2c; --text-muted: #6a7383; --text-dim: #9aa1ad;
+  --accent: #1f3a68; --ok: #1D9E75; --warn: #EF9F27; --err: #E24B4A; --info: #378ADD; --purple: #7F77DD;
+}
+
+html[data-theme="dark"] {
+  --bg: #0e1116; --bg-card: #181c24; --bg-inner: #11141b; --bg-hover: #232833;
+  --border: #2a3140; --text: #e6eaf2; --text-muted: #9aa3b0; --text-dim: #707582;
+  --accent: #6da8ff; --ok: #4ec894; --warn: #f2b04e; --err: #ff6b6b; --info: #6da8ff; --purple: #a0a0ff;
+}

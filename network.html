@@ -8,26 +8,9 @@
 <title>Карта сети · SmartComm</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231f3a68'/%3E%3Ctext x='16' y='22' font-family='-apple-system,Segoe UI,sans-serif' font-size='15' font-weight='700' text-anchor='middle' fill='white'%3ESC%3C/text%3E%3C/svg%3E">
 <link rel="manifest" href="/manifest.json">
+<link rel="stylesheet" href="/tokens.css">
 <style>
-  :root {
-    /* Дизайн-система: радиусы (sync с index.html) */
-    --r-sm: 6px;    /* пилюли, мелкие кнопки */
-    --r-md: 9px;    /* обычные кнопки, инпуты */
-    --r-lg: 14px;   /* карточки, модалки */
-    --bg: #ffffff; --bg-card: #f7f8fa; --bg-inner: #ffffff; --bg-hover: #eef0f4;
-    --border: #e3e6ec; --text: #1a1f2c; --text-muted: #6a7383; --text-dim: #9aa1ad;
-    --accent: #1f3a68; --ok: #1D9E75; --warn: #EF9F27; --err: #E24B4A;
-    --info: #378ADD; --purple: #7F77DD;
-    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #0e1116; --bg-card: #181c24; --bg-inner: #11141b; --bg-hover: #232833;
-      --border: #2a3140; --text: #e6eaf2; --text-muted: #9aa3b0; --text-dim: #707582;
-      --accent: #6da8ff; --ok: #4ec894; --warn: #f2b04e; --err: #ff6b6b;
-      --info: #6da8ff; --purple: #a0a0ff;
-    }
-  }
+  /* Дизайн-токены (CSS-переменные) вынесены в /tokens.css. */
   /* Btn-action style — синхронизировано с дашбордом */
   .btn-action { display: inline-flex; align-items: center; gap: 8px; padding: 10px 14px; font: inherit; font-size: 13px; font-weight: 500; border-radius: 10px; cursor: pointer; border: 1px solid; background: transparent; transition: transform 0.1s, filter 0.15s; min-height: 40px; -webkit-tap-highlight-color: transparent; }
   .btn-action:active { transform: scale(0.96); filter: brightness(1.1); }
@@ -53,19 +36,6 @@
   .ssh-pick-list { display: flex; flex-direction: column; gap: 6px; }
   .ssh-pick-row { display: flex; flex-direction: column; gap: 2px; align-items: flex-start; padding: 10px 12px; font: inherit; font-size: 13px; color: var(--text); background: var(--bg-inner); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; text-align: left; transition: background 0.12s, border-color 0.12s; -webkit-tap-highlight-color: transparent; }
   .ssh-pick-row:hover { background: var(--bg-hover); border-color: var(--accent); }
-  /* Explicit theme overrides via data-theme="light|dark" on <html> — синхронизировано с index.html */
-  html[data-theme="light"] {
-    --bg: #ffffff; --bg-card: #f7f8fa; --bg-inner: #ffffff; --bg-hover: #eef0f4;
-    --border: #e3e6ec; --text: #1a1f2c; --text-muted: #6a7383; --text-dim: #9aa1ad;
-    --accent: #1f3a68; --ok: #1D9E75; --warn: #EF9F27; --err: #E24B4A;
-    --info: #378ADD; --purple: #7F77DD;
-  }
-  html[data-theme="dark"] {
-    --bg: #0e1116; --bg-card: #181c24; --bg-inner: #11141b; --bg-hover: #232833;
-    --border: #2a3140; --text: #e6eaf2; --text-muted: #9aa3b0; --text-dim: #707582;
-    --accent: #6da8ff; --ok: #4ec894; --warn: #f2b04e; --err: #ff6b6b;
-    --info: #6da8ff; --purple: #a0a0ff;
-  }
   * { box-sizing: border-box; }
   /* Utility-классы (синхронно с index.html) */
   .hidden { display: none !important; }

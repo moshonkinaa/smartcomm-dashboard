@@ -5,29 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Вход — Монитор SmartComm</title>
 <link rel="manifest" href="/manifest.json">
+<link rel="stylesheet" href="/tokens.css">
 <style>
-  :root {
-    --bg: #ffffff; --bg-card: #f7f8fa; --bg-inner: #ffffff; --bg-hover: #eef0f4;
-    --border: #e3e6ec; --text: #1a1f2c; --text-muted: #6a7383; --text-dim: #9aa1ad;
-    --accent: #1f3a68; --ok: #1D9E75; --warn: #EF9F27; --err: #E24B4A;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #0e1116; --bg-card: #181c24; --bg-inner: #11141b; --bg-hover: #232833;
-      --border: #2a3140; --text: #e6eaf2; --text-muted: #9aa3b0; --text-dim: #707582;
-      --accent: #6da8ff; --ok: #4ec894; --warn: #f2b04e; --err: #ff6b6b;
-    }
-  }
-  html[data-theme="light"] {
-    --bg: #ffffff; --bg-card: #f7f8fa; --bg-inner: #ffffff; --bg-hover: #eef0f4;
-    --border: #e3e6ec; --text: #1a1f2c; --text-muted: #6a7383; --text-dim: #9aa1ad;
-    --accent: #1f3a68; --ok: #1D9E75; --warn: #EF9F27; --err: #E24B4A;
-  }
-  html[data-theme="dark"] {
-    --bg: #0e1116; --bg-card: #181c24; --bg-inner: #11141b; --bg-hover: #232833;
-    --border: #2a3140; --text: #e6eaf2; --text-muted: #9aa3b0; --text-dim: #707582;
-    --accent: #6da8ff; --ok: #4ec894; --warn: #f2b04e; --err: #ff6b6b;
-  }
+  /* Дизайн-токены (CSS-переменные) вынесены в /tokens.css (публичный роут —
+     login отдаётся неаутентифицированным). */
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;

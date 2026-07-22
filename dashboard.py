@@ -106,7 +106,7 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "3.4.5"
+VERSION = "3.5.0"
 RELEASE_DATE = "2026-07-22"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # SECURITY: допустимый идентификатор сервиса (идёт в filesystem-путь + docker compose).
@@ -175,7 +175,7 @@ app.register_blueprint(network_bp.bp)
 _AUTH_PUBLIC_PATHS = {
     "/login", "/api/auth/login", "/api/auth/logout", "/api/auth/me",
     "/sw.js", "/manifest.json", "/chart.min.js", "/favicon.ico",
-    "/marked.min.js",
+    "/marked.min.js", "/tokens.css",
 }
 
 # Пути, требующие is_admin (не просто залогинен). Защищают:
@@ -1687,6 +1687,14 @@ def sw():
 @app.route("/marked.min.js")
 def marked_js():
     return send_from_directory(BASE, "marked.min.js")
+
+
+@app.route("/tokens.css")
+def tokens_css():
+    # Централизованные дизайн-токены (CSS-переменные). Публичный (в
+    # _AUTH_PUBLIC_PATHS) — login.html отдаётся неаутентифицированным, а без
+    # переменных страница была бы без темы. Секретов не содержит.
+    return send_from_directory(BASE, "tokens.css")
 
 
 @app.route("/api/fleet/settings", methods=["GET"])
