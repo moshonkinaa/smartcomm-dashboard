@@ -63,3 +63,34 @@
 .range-toggle { float: right; display: inline-flex; gap: 0; background: var(--bg-inner); border-radius: 8px; padding: 2px; border: 1px solid var(--border); }
 .range-toggle button { padding: 4px 12px; font: inherit; font-size: 11px; font-weight: 500; border: none; background: transparent; color: var(--text-muted); cursor: pointer; border-radius: 6px; -webkit-tap-highlight-color: transparent; }
 .range-toggle button.active { background: var(--bg-hover); color: var(--text); }
+
+/* ============================================================
+   Нормализованные классы: canonical-база здесь, на страницах остаётся только
+   delta-override отличий (network — ширина/pill; services — компактность/модалка;
+   login — карточка входа). Проверено property-by-property: canonical + delta даёт
+   те же computed-стили, что было (пиксель-в-пиксель, 0 изменений вида). Модификаторы
+   (.card.*, .pill.*) и поведенческие варианты (.chip) остались на страницах. */
+
+/* ---- Layout ---- */
+.container { max-width: 1200px; margin: 0 auto; padding: 14px; }
+.grid { display: grid; gap: 12px; margin-bottom: 12px; }
+.grid-4 { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+.grid-2 { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+
+/* ---- Header ---- */
+.header { display: flex; justify-content: space-between; align-items: center; padding: 18px 20px; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r-lg); margin-bottom: 14px; gap: 12px; }
+.header h1 { font-size: 22px; font-weight: 500; margin: 0; letter-spacing: -0.2px; }
+.header-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+
+/* ---- Card: базовая поверхность (.card.* модификаторы — на страницах) ---- */
+.card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 14px 16px; }
+
+/* ---- ProgressBar ---- */
+.bar { height: 6px; background: var(--bg-inner); border-radius: 3px; margin-top: 10px; overflow: hidden; }
+.bar-fill { height: 100%; border-radius: 3px; transition: width 0.4s, background 0.4s; width: 0; }
+
+/* ---- Pill: базовый (.pill.* статусы — на страницах) ---- */
+.pill { display: inline-block; padding: 4px 10px; font-size: 11px; border-radius: var(--r-lg); background: var(--bg-inner); border: 1px solid var(--border); }
+
+/* ---- Modal ---- */
+.modal-box { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 20px; max-width: 640px; width: 100%; max-height: 90vh; overflow-y: auto; }

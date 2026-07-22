@@ -2,6 +2,25 @@
 
 Все значимые изменения проекта. Формат — Keep a Changelog + SemVer.
 
+## 3.7.0 — 2026-07-22
+
+**Дизайн-система: нормализация расходящихся компонентных классов (canonical + delta).**
+
+Завершение 3.5.0/3.6.0. Классы, которые раньше нельзя было вынести из-за расхождений между страницами, теперь централизованы по схеме **canonical-база в `/components.css` + минимальный delta-override на странице** там, где отличие осознанное. Внешний вид не изменился — проверено попиксельно (диф computed-стилей реальных файлов: **41 свойство на 4 страницах, 0 расхождений**; скриншот-диф в среде недоступен, computed-диф строже).
+
+### Вынесены в components.css (canonical из index)
+`.container`, `.grid`/`.grid-4`/`.grid-2`, `.header` + `.header h1`, `.header-actions`, `.card` (база), `.bar`/`.bar-fill`, `.pill` (база), `.modal-box`.
+
+### Delta-оверрайды, оставшиеся на страницах (осознанные отличия)
+- **network**: `.container{max-width:1400px}` (карта сети шире), `.header{flex-wrap:wrap}`, `.card{margin-bottom:12px}`, `.pill{padding:2px 9px;font-size:10.5px;border-radius:11px;color:…}`.
+- **services**: `.header{padding:14px 18px;flex-wrap:wrap}`, `.header-actions{gap:8px;align-items:center;margin-top:0}`, `.card{padding:14px;display:flex;flex-direction:column;cursor:pointer;transition:…}`, `.modal-box{padding:22px;max-width:620px}`.
+- **login**: `.card{padding:28px;max-width:380px;width:100%;box-shadow:…}` (карточка входа).
+
+Модификаторы (`.card.crit-*`, `.card.installed`, `.pill.ok/off/…`) и поведенческие варианты (`.chip` с `:hover:not(.active)`, `.btn-action` compact в services) остались локальными — их унификация меняла бы вид/поведение.
+
+### Пока НЕ нормализовано
+`.btn-action` (services — компактный solid-вариант; `.c-*` в index на хардкод-hex, в services на `var()` — расходятся в тёмной теме), `.chip`, `.dot`. Требуют решения о микро-правках вида (напр. тёмная тема кнопок index).
+
 ## 3.6.0 — 2026-07-22
 
 **Дизайн-система: компонентные классы в `/components.css`.**

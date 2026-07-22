@@ -30,9 +30,9 @@
   .text-err { color: var(--err); }
   .fs-xs { font-size: 11px; } .fs-sm { font-size: 11.5px; } .fs-md { font-size: 12.5px; }
 
-  .header { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r-lg); margin-bottom: 14px; gap: 12px; flex-wrap: wrap; }
+  .header { padding: 14px 18px; flex-wrap: wrap; }   /* база → /components.css */
   h1 { margin: 0; font-size: 17px; font-weight: 500; }
-  .header-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .header-actions { gap: 8px; align-items: center; margin-top: 0; }   /* база → /components.css */
   .btn-action { padding: 7px 13px; font: inherit; font-size: 12.5px; font-weight: 500; color: var(--text); background: var(--bg-inner); border: 1px solid var(--border); border-radius: var(--r-md); cursor: pointer; display: inline-flex; align-items: center; gap: 5px; -webkit-tap-highlight-color: transparent; }
   .btn-action:hover { background: var(--bg-hover); }
   .btn-action svg { width: 13px; height: 13px; }
@@ -68,7 +68,7 @@
 
   /* Catalog grid */
   .catalog { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 12px; }
-  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 14px; display: flex; flex-direction: column; cursor: pointer; transition: border-color 0.15s, transform 0.1s; }
+  .card { padding: 14px; display: flex; flex-direction: column; cursor: pointer; transition: border-color 0.15s, transform 0.1s; }   /* база → /components.css; .card.* модификаторы ниже */
   .card:hover { border-color: var(--accent); }
   .card:active { transform: scale(0.99); }
   .card.installed { border-color: rgba(29,158,117,0.4); }
@@ -141,7 +141,7 @@
   .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.55); display: none; z-index: 100; padding: 20px; }
   /* Toast выше модалок чтобы не прятался под ними */
   .modal-backdrop.show { display: flex; align-items: center; justify-content: center; overflow-y: auto; }
-  .modal-box { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 22px; max-width: 620px; width: 100%; max-height: 90vh; overflow-y: auto; }
+  .modal-box { padding: 22px; max-width: 620px; }   /* база → /components.css */
   .modal-head { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 14px; }
   .modal-icon { width: 48px; height: 48px; flex-shrink: 0; background: var(--bg-inner); border: 1px solid var(--border); border-radius: 11px; display: flex; align-items: center; justify-content: center; font-size: 24px; }
   .modal-title { margin: 0; font-size: 18px; font-weight: 500; }
