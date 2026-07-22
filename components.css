@@ -1,0 +1,65 @@
+/* SmartComm Design System — общие компонентные классы.
+   Подключается ПОСЛЕ tokens.css (использует его переменные):
+     <link rel="stylesheet" href="/tokens.css">
+     <link rel="stylesheet" href="/components.css">
+
+   Извлечено ДОСЛОВНО из живого index.html (источник истины). Сюда вынесены
+   ТОЛЬКО классы, которые безопасно централизовать: определены идентично и
+   используются лишь там, где определены (проверено анализатором — нет
+   расхождений между страницами и нет «протечки» на страницы, где класс
+   используется, но не стилится).
+
+   НЕ вынесены (остались локально в файлах — реально расходятся между страницами
+   или используются без определения): .btn-action, .card, .header, .container,
+   .chip, .dot, .pill, .modal-box, .toast, .grid, .bar, .panel-title. Их
+   унификация потребовала бы визуальной нормализации — отдельным заходом.
+
+   Мобильные @media-оверрайды этих классов остались в index.html (страничная
+   адаптация; ложится поверх этой базы). */
+
+/* ---- MetricCard: текст KPI-плитки ---- */
+.card-title { font-size: 12px; color: var(--text-muted); margin: 0 0 6px; }
+.card-value { font-size: 24px; font-weight: 500; margin: 0; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.card-sub { font-size: 12px; color: var(--text-dim); margin: 6px 0 0; }
+
+/* ---- TileButton: мелкие действия в карточке ---- */
+.tile-btn { display: inline-flex; align-items: center; gap: 5px; padding: 6px 11px; font: inherit; font-size: 11.5px; font-weight: 500; border-radius: 7px; cursor: pointer; background: var(--bg); border: 1px solid var(--border); color: var(--text); transition: background 0.12s, transform 0.08s, border-color 0.12s; -webkit-tap-highlight-color: transparent; }
+.tile-btn svg { width: 13px; height: 13px; }
+.tile-btn:hover { transform: translateY(-1px); }
+.tile-btn:active { transform: scale(0.97); }
+.tile-btn.primary { background: rgba(55,138,221,0.13); border-color: rgba(55,138,221,0.45); color: var(--info); }
+.tile-btn.primary:hover { background: rgba(55,138,221,0.22); }
+.tile-btn.success { background: rgba(29,158,117,0.13); border-color: rgba(29,158,117,0.45); color: var(--ok); }
+.tile-btn.success:hover { background: rgba(29,158,117,0.22); }
+.tile-btn.warn    { background: rgba(187,125,0,0.13); border-color: rgba(187,125,0,0.45); color: #BA7517; }
+.tile-btn.warn:hover    { background: rgba(187,125,0,0.22); }
+.tile-btn.danger  { background: rgba(226,75,74,0.13); border-color: rgba(226,75,74,0.45); color: var(--err); }
+.tile-btn.danger:hover  { background: rgba(226,75,74,0.22); }
+
+/* ---- Таблица процессов ---- */
+.processes { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+.processes th, .processes td { padding: 6px 4px; text-align: left; border-bottom: 1px solid var(--border); }
+.processes tr:last-child td { border-bottom: 0; }
+.processes th { color: var(--text-muted); font-weight: 400; font-size: 11px; }
+.processes td.num { text-align: right; }
+.processes td.cmd { font-family: var(--mono); color: var(--text-muted); }
+
+/* ---- Вложенный блок / заголовок ---- */
+.ir-block { background: var(--bg-inner); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+.ir-block-title { font-size: 11px; font-weight: 500; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; margin: 0 0 8px; }
+
+/* ---- HealthItem: строка health-check ---- */
+.health-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; background: var(--bg-inner); border: 1px solid var(--border); }
+.health-item .icon { font-size: 18px; font-weight: 500; min-width: 18px; text-align: center; }
+.health-item .label { font-size: 13px; font-weight: 500; margin: 0; line-height: 1.2; }
+.health-item .detail { font-size: 11px; color: var(--text-muted); margin: 2px 0 0; line-height: 1.3; word-break: break-word; }
+.health-item.ok .icon { color: var(--ok); }
+.health-item.warn .icon { color: var(--warn); }
+.health-item.err .icon { color: var(--err); }
+.health-item.warn { border-color: rgba(239,159,39,0.3); }
+.health-item.err  { border-color: rgba(226,75,74,0.3); }
+
+/* ---- SegmentedControl: переключатель диапазона (1ч/24ч) ---- */
+.range-toggle { float: right; display: inline-flex; gap: 0; background: var(--bg-inner); border-radius: 8px; padding: 2px; border: 1px solid var(--border); }
+.range-toggle button { padding: 4px 12px; font: inherit; font-size: 11px; font-weight: 500; border: none; background: transparent; color: var(--text-muted); cursor: pointer; border-radius: 6px; -webkit-tap-highlight-color: transparent; }
+.range-toggle button.active { background: var(--bg-hover); color: var(--text); }

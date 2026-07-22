@@ -43,7 +43,7 @@ if ! id "$SVC_USER" >/dev/null 2>&1; then
   exit 1
 fi
 
-REQUIRED_FILES=(dashboard.py network.py mikrotik.py services.py fleet_agent.py index.html network.html services.html login.html tokens.css chart.min.js manifest.json sw.js smartcomm-dashboard.service)
+REQUIRED_FILES=(dashboard.py network.py mikrotik.py services.py fleet_agent.py index.html network.html services.html login.html tokens.css components.css chart.min.js manifest.json sw.js smartcomm-dashboard.service)
 OPTIONAL_FILES=(CHANGELOG.md marked.min.js)
 for f in "${REQUIRED_FILES[@]}"; do
   if [ ! -f "$SRC_DIR/$f" ]; then
@@ -120,7 +120,7 @@ echo "  $APP_DIR + $DATA_DIR готовы (perms 700/600)"
 # ===== 4. Копирование файлов =====
 echo ""
 echo "[4/6] Копируем файлы дашборда → $APP_DIR/"
-for f in dashboard.py network.py mikrotik.py services.py index.html network.html services.html login.html tokens.css chart.min.js manifest.json sw.js; do
+for f in dashboard.py network.py mikrotik.py services.py index.html network.html services.html login.html tokens.css components.css chart.min.js manifest.json sw.js; do
   cp "$SRC_DIR/$f" "$APP_DIR/$f"
   chmod 644 "$APP_DIR/$f"
 done
