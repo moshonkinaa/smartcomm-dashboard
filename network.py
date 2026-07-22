@@ -404,7 +404,10 @@ def init_db():
                 result TEXT
             )
         """)
-        c.execute("CREATE INDEX IF NOT EXISTS idx_audit_ts ON auth_audit(ts)")
+        # имя idx_auth_audit_ts, НЕ idx_audit_ts — то имя уже занято индексом
+        # device_audit(ts); из-за IF NOT EXISTS индекс на auth_audit(ts) молча не
+        # создавался (full-scan в auth_get_audit/cleanup при 90-дн ретеншене).
+        c.execute("CREATE INDEX IF NOT EXISTS idx_auth_audit_ts ON auth_audit(ts)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_sessions_seen ON auth_sessions(last_seen)")
         # migrate: move legacy login/password into device_credentials as
         # "основной" credential (only for devices that don't already have one).
@@ -747,8 +750,10 @@ def _audit_request_meta():
         sid = request.cookies.get("sc_session")
         sess = auth_get_session(sid) if sid else None
         username = sess.get("username") if sess else None
-        xff = request.headers.get("X-Forwarded-For", "")
-        ip = xff.split(",")[0].strip() if xff else (request.remote_addr or "?")
+        # SECURITY: НЕ доверяем X-Forwarded-For (waitress слушает напрямую, прокси нет
+        # → XFF = ввод атакующего). Раньше XFF писался в аудит → подделка source-IP.
+        # Синхронно с dashboard._client_ip.
+        ip = request.remote_addr or "?"
         return username, ip
     except Exception:
         return None, None

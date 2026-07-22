@@ -2,6 +2,22 @@
 
 Все значимые изменения проекта. Формат — Keep a Changelog + SemVer.
 
+## 3.4.3 — 2026-07-22
+
+**Глубокий аудит всего кода (4 агента: correctness / reliability / data-integrity / cross-platform) → безопасные фиксы.**
+
+### Security
+- `login.html`: open-redirect на пути «уже залогинен» — редирект шёл сырым `?next=`, а не через `safeNext()` (фикс 3.4.1 закрыл только submit-путь, но не me-check).
+- `network.py` `_audit_request_meta`: убрано доверие `X-Forwarded-For` при записи IP в аудит — waitress работает напрямую, XFF можно подделать → отравление аудит-лога. Теперь только `request.remote_addr`.
+- `dashboard.py`: `MAX_CONTENT_LENGTH = 8 МБ` — защита от OOM на непомерном теле запроса.
+
+### Fixed / reliability
+- `network.py`: индекс `idx_audit_ts` на `auth_audit(ts)` конфликтовал по имени с индексом `device_audit(ts)` → фактически не создавался, фильтр аудита по дате шёл full-scan. Переименован в `idx_auth_audit_ts`.
+- `services.py` `_parse_docker_size`: regex без `IGNORECASE` не матчил строчные единицы (`kB`/`mB` из `docker stats`) → сетевой I/O контейнеров занижался ~в 1024×.
+- `dashboard.py` samplers-запуск: 3 независимых `try/except` (discover / sampler / auto-updater) — раньше один блок, падение первого шага глушило остальные.
+- `dashboard.py` бэкап-ротация: чистим и `inventory.pre-migration-*.db`, и `app-pre-*` (каталоги — `rmtree`), а не только `inventory_*.db` — старые бэкапы копились без счёта.
+- SMART-плитка: NVMe теперь помечается «SSD» (по `device.type=="nvme"`, не только `rotation_rate==0`).
+
 ## 3.4.2 — 2026-07-17
 
 **Добивка LOW-техдолга из аудита.**

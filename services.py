@@ -1217,7 +1217,9 @@ def _parse_docker_size(s):
     """'12.3MiB' / '1.2GiB' / '500kB' → MB float."""
     if not s:
         return 0.0
-    m = re.match(r"([\d.]+)\s*([KMGT]?i?B)?", s)
+    # IGNORECASE: docker NetIO использует строчную «k» (SI: «1.24kB»), а MemUsage —
+    # «MiB/GiB». Без флага «kB» не матчился как unit → делился как байты (в ~1024× меньше).
+    m = re.match(r"([\d.]+)\s*([KMGT]?i?B)?", s, re.IGNORECASE)
     if not m:
         return 0.0
     val = float(m.group(1))

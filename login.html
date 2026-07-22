@@ -96,7 +96,7 @@ function safeNext() {
 // Если уже залогинены — редирект на главную
 fetch('/api/auth/me').then(r => r.json()).then(j => {
   if (j.authenticated) {
-    const next = new URLSearchParams(location.search).get('next') || '/';
+    const next = safeNext();
     location.href = next;
   } else {
     // Показать подсказку про admin/admin если ещё не входили (нет cookie)

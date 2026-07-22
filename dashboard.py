@@ -106,8 +106,8 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "3.4.2"
-RELEASE_DATE = "2026-07-17"
+VERSION = "3.4.3"
+RELEASE_DATE = "2026-07-22"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # SECURITY: допустимый идентификатор сервиса (идёт в filesystem-путь + docker compose).
 _SERVICE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
@@ -155,6 +155,9 @@ def _login_note_ok(ip):
 MIN_COMPATIBLE_CLIENT = "1.0.0"
 
 app = Flask(__name__)
+# Лимит тела запроса (паритет с порталом). Фото режется до 2МБ уже в хендлере,
+# но глобальный лимит защищает и остальные POST от гигантских тел (память).
+app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024
 
 # gzip compression for API + HTML — ~10x reduction for /api/network/devices
 try:
@@ -1434,9 +1437,11 @@ def smart_disk_health():
     except (json.JSONDecodeError, subprocess.TimeoutExpired):
         return None
 
+    # NVMe не отдаёт ATA-поле rotation_rate → раньше default 1 → «HDD». Проверяем тип.
+    _is_nvme = (data.get("device", {}) or {}).get("type") == "nvme"
     info = {
         "device": dev,
-        "card_type": "SSD" if data.get("rotation_rate", 1) == 0 else "HDD",
+        "card_type": "SSD" if (_is_nvme or data.get("rotation_rate", 1) == 0) else "HDD",
         "model": data.get("model_name") or data.get("model_family", "?"),
         "serial": data.get("serial_number"),
         "firmware": data.get("firmware_version"),
@@ -2773,12 +2778,21 @@ def backup_inventory():
     except Exception as e:
         app.logger.error(f"backup failed: {e}")
         return
-    # cleanup old backups
+    # cleanup old backups. ВАЖНО: чистим не только inventory_*.db, но и
+    # pre-migration бекапы (inventory.pre-migration-*.db — точка, не подчёркивание)
+    # и app-pre-* (каталоги полной копии app при апдейтах) — раньше они не попадали
+    # под glob и копились вечно, забивая диск.
     cutoff = time.time() - BACKUP_RETENTION_DAYS * 86400
-    for f in BACKUP_DIR.glob("inventory_*.db"):
+    victims = (list(BACKUP_DIR.glob("inventory_*.db"))
+               + list(BACKUP_DIR.glob("inventory.pre-migration-*.db"))
+               + list(BACKUP_DIR.glob("app-pre-*")))
+    for f in victims:
         try:
             if f.stat().st_mtime < cutoff:
-                f.unlink()
+                if f.is_dir():
+                    shutil.rmtree(f, ignore_errors=True)
+                else:
+                    f.unlink()
         except Exception:
             pass
 
@@ -2814,15 +2828,23 @@ threading.Thread(target=_auth_cleanup_loop, daemon=True).start()
 threading.Thread(target=_update_check_loop, daemon=True).start()
 
 # Services: discover existing installations (compensate v1.6.0 БД bug) + start sampler
-# + auto-updater (v2.2.0)
+# + auto-updater (v2.2.0). НЕЗАВИСИМЫЕ try — раньше всё было в одном блоке: если
+# discover_existing() кидал (напр. OSError из docker subprocess), sampler/health/
+# auto-updater НЕ стартовали → статусы сервисов замирали навсегда.
 try:
     found = services_mod.discover_existing()
     if found:
         print(f"[services] discovered {found} previously-installed services")
+except Exception as e:
+    print(f"[services] discover warn: {e}")
+try:
     services_mod.ensure_sampler_started()
+except Exception as e:
+    print(f"[services] sampler start warn: {e}")
+try:
     services_mod.ensure_auto_updater_started()
 except Exception as e:
-    print(f"[services] init warn: {e}")
+    print(f"[services] auto-updater start warn: {e}")
 
 
 # ============ Fleet-агент (heartbeat на сводный портал) ============
