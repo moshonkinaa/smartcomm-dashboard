@@ -728,38 +728,66 @@ def stream_logs(service_id, since="30m", level=None):
     cmd = ["sudo", "docker", "compose", "-f", str(compose_path),
            "logs", "--follow", "--tail", "100", "--no-color",
            "--since", since]
+    # RELIABILITY (#80): читаем НЕблокирующе через select, а не proc.stdout.readline().
+    # Раньше readline() блокировал поток навсегда на тихом контейнере (нет новых
+    # строк): keepalive не отправлялся и — главное — отвал клиента не детектился,
+    # поэтому waitress-поток и docker-follow-процесс висели ВЕЧНО. При _SSE_MAX=4
+    # после 4 таких утечек live-tail умирал (503). Теперь цикл просыпается каждые
+    # POLL секунд даже в тишине: раз в 15с шлём keepalive — он же ловит отвал
+    # клиента (yield на закрытый сокет → GeneratorExit → finally приберёт proc).
+    # bufsize=0 (сырой bytes-поток) — читаем os.read по fileno, буферизуем и
+    # режем по \n сами (не смешиваем с буфером TextIOWrapper).
+    import select as _select, os as _os
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, text=True,
-                                bufsize=1)   # line-buffered
+                                stderr=subprocess.STDOUT, bufsize=0)
     except (FileNotFoundError, OSError) as e:
         yield f"event: error\ndata: spawn failed: {e}\n\n"
         return
 
+    fd = proc.stdout.fileno()
+    _os.set_blocking(fd, False)
+    POLL = 5.0
+    buf = b""
+    last_send = time.time()
     try:
-        # Keepalive каждые 15с (некоторые прокси/браузеры закрывают idle SSE)
-        last_send = time.time()
         while True:
-            line = proc.stdout.readline()
+            rlist, _, _ = _select.select([fd], [], [], POLL)
             now = time.time()
-            if not line:
+            if rlist:
+                try:
+                    data = _os.read(fd, 65536)
+                except BlockingIOError:
+                    data = None          # ложное пробуждение — данных ещё нет
+                except OSError:
+                    data = b""           # труба сломана → трактуем как EOF
+                if data:
+                    buf += data
+                    while b"\n" in buf:
+                        raw, buf = buf.split(b"\n", 1)
+                        line = raw.rstrip(b"\r").decode("utf-8", "replace")
+                        if not line:
+                            continue
+                        if pattern and not pattern.search(line):
+                            continue
+                        yield f"data: {line}\n\n"
+                        last_send = now
+                elif data == b"":
+                    # EOF — docker закрыл stdout. Отдаём хвост буфера без \n.
+                    tail = buf.rstrip(b"\r\n").decode("utf-8", "replace")
+                    if tail and (not pattern or pattern.search(tail)):
+                        yield f"data: {tail}\n\n"
+                    yield "event: end\ndata: process exited\n\n"
+                    break
+                # data is None → крутимся дальше
+            else:
+                # таймаут select — новых строк нет
                 if proc.poll() is not None:
                     yield "event: end\ndata: process exited\n\n"
                     break
                 if now - last_send > 15:
-                    yield ": keepalive\n\n"  # SSE comment, не data
+                    yield ": keepalive\n\n"   # SSE-комментарий, не data
                     last_send = now
-                continue
-            line = line.rstrip("\n\r")
-            if not line:
-                continue
-            if pattern and not pattern.search(line):
-                continue
-            # SSE формат: data: <line>\n\n. Многострочные сообщения уже разбиты по \n.
-            # Экранируем только \n (внутри одной line не должно быть, но safety net).
-            safe = line.replace("\n", "\\n")
-            yield f"data: {safe}\n\n"
-            last_send = now
     finally:
         try:
             proc.terminate()
