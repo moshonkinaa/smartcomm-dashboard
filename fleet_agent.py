@@ -20,8 +20,47 @@ import time
 import urllib.request
 import urllib.error
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from cryptography.exceptions import InvalidSignature
+
 HEARTBEAT_SEC = 60
 HTTP_TIMEOUT = 15
+
+# #72: защита от replay — виденные nonce с их expires_at (чистим протухшие).
+_SEEN_NONCES = {}
+
+
+def _canonical_cmd(cmd):
+    """Та же детерминированная сериализация подписываемых полей, что и на портале."""
+    fields = {k: cmd.get(k) for k in
+              ("id", "node_id", "command", "params", "nonce", "issued_at", "expires_at")}
+    if fields["params"] is None:
+        fields["params"] = {}
+    return json.dumps(fields, sort_keys=True, separators=(",", ":")).encode()
+
+
+def _verify_command(cmd, pubkey_hex):
+    """Проверка подписи Ed25519 + expiry + replay. Возвращает (ok, reason)."""
+    now = int(time.time())
+    for n in [n for n, exp in _SEEN_NONCES.items() if exp < now]:
+        _SEEN_NONCES.pop(n, None)
+    sig = cmd.get("sig"); nonce = cmd.get("nonce"); exp = cmd.get("expires_at")
+    if not sig or not nonce or exp is None:
+        return False, "нет подписи/nonce/expiry"
+    try:
+        if int(exp) < now:
+            return False, "устарела (expired)"
+    except (TypeError, ValueError):
+        return False, "битый expires_at"
+    if nonce in _SEEN_NONCES:
+        return False, "replay (nonce уже виден)"
+    try:
+        pub = Ed25519PublicKey.from_public_bytes(bytes.fromhex(pubkey_hex))
+        pub.verify(bytes.fromhex(sig), _canonical_cmd(cmd))
+    except (InvalidSignature, ValueError):
+        return False, "неверная подпись"
+    _SEEN_NONCES[nonce] = int(exp)
+    return True, "ok"
 
 _STARTED = False
 _STATE = {"last_ok": 0, "last_error": None, "last_attempt": 0}
@@ -75,11 +114,28 @@ def _heartbeat_loop(get_snapshot, get_setting, run_command):
             _STATE["last_ok"] = int(time.time())
             _STATE["last_error"] = None
 
-            # 2. Выполнить команды (если есть) и отрепортить
+            # 2. Выполнить команды (если есть) и отрепортить.
+            # #72: проверяем подпись Ed25519. Публичный ключ пинится в настройке
+            # fleet_cmd_pubkey (ставится при онбординге). Ключ настроен → fail-CLOSED
+            # (плохая/просроченная/replay-команда отвергается). НЕ настроен → fail-open
+            # + видимое предупреждение (обратная совместимость при раскатке).
+            pubkey_hex = (get_setting("fleet_cmd_pubkey", "") or "").strip()
+            _STATE["cmd_signing"] = "ok" if pubkey_hex else "НЕ настроена (fleet_cmd_pubkey пуст)"
             for cmd in (resp.get("commands") or []):
                 cid = cmd.get("id")
                 name = cmd.get("command")
                 params = cmd.get("params") or {}
+                if pubkey_hex:
+                    okv, reason = _verify_command(cmd, pubkey_hex)
+                    if not okv:
+                        _STATE["last_error"] = f"команда '{name}' ОТВЕРГНУТА: {reason}"
+                        try:
+                            _post_json(portal + "/fleet/api/command-result",
+                                       {"id": cid, "status": "failed",
+                                        "result": f"подпись отвергнута: {reason}"}, headers)
+                        except Exception:
+                            pass
+                        continue
                 try:
                     ok, result = run_command(name, params)
                 except Exception as e:
