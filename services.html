@@ -33,12 +33,8 @@
   .header { padding: 14px 18px; flex-wrap: wrap; }   /* база → /components.css */
   h1 { margin: 0; font-size: 17px; font-weight: 500; }
   .header-actions { gap: 8px; align-items: center; margin-top: 0; }   /* база → /components.css */
-  .btn-action { padding: 7px 13px; font: inherit; font-size: 12.5px; font-weight: 500; color: var(--text); background: var(--bg-inner); border: 1px solid var(--border); border-radius: var(--r-md); cursor: pointer; display: inline-flex; align-items: center; gap: 5px; -webkit-tap-highlight-color: transparent; }
-  .btn-action:hover { background: var(--bg-hover); }
-  .btn-action svg { width: 13px; height: 13px; }
-  /* .btn-action.c-* + :active → /components.css (единая система). База .btn-action
-     (компактная solid) + :hover/:disabled остались ниже — локальны для services. */
-  .btn-action:disabled { opacity: 0.55; cursor: not-allowed; }
+  /* .btn-action + компактный вариант .btn-action.compact (solid + :hover/:disabled/svg)
+     + .c-* + :active → /components.css. Кнопки размечены class="btn-action compact …". */
   /* В .modal-actions кнопки равной ширины (flex: 1 1 0) для аккуратного ряда */
   .modal-actions { gap: 8px; }
   .modal-actions .btn-action,
@@ -175,15 +171,15 @@
     <p style="margin: 4px 0 0; font-size: 12px; color: var(--text-muted);" id="hdr-meta">…</p>
   </div>
   <div class="header-actions">
-    <button class="btn-action c-mute" onclick="location.href='/'">
+    <button class="btn-action compact c-mute" onclick="location.href='/'">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>
       На дашборд
     </button>
-    <button class="btn-action c-mute" onclick="exportConfig()" title="Скачать ZIP всех compose.yml + manifest.json — для бэкапа конфигурации">
+    <button class="btn-action compact c-mute" onclick="exportConfig()" title="Скачать ZIP всех compose.yml + manifest.json — для бэкапа конфигурации">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
       Экспорт config
     </button>
-    <button class="btn-action c-mute" id="btn-refresh" onclick="refreshCatalog()" title="git pull каталога с GitHub">
+    <button class="btn-action compact c-mute" id="btn-refresh" onclick="refreshCatalog()" title="git pull каталога с GitHub">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>
       Обновить каталог
     </button>
@@ -197,9 +193,9 @@
 <!-- v2.6: Bulk actions toolbar (показывается только если установлено >= 2 сервиса) -->
 <div id="bulk-actions" style="display:none;background:var(--bg-card);border:1px solid var(--border);border-radius:9px;padding:8px 12px;margin-bottom:12px;font-size:12px;color:var(--text-muted);align-items:center;gap:8px;flex-wrap:wrap">
   <span style="font-weight:500">⚡ Массовые действия:</span>
-  <button class="btn-action" onclick="bulkAction('restart')" style="padding:4px 10px;font-size:12px">↻ Перезапустить все</button>
-  <button class="btn-action c-amber" onclick="bulkAction('stop')" style="padding:4px 10px;font-size:12px">⏸ Остановить все</button>
-  <button class="btn-action c-green" onclick="bulkAction('start')" style="padding:4px 10px;font-size:12px">▶ Запустить все</button>
+  <button class="btn-action compact" onclick="bulkAction('restart')" style="padding:4px 10px;font-size:12px">↻ Перезапустить все</button>
+  <button class="btn-action compact c-amber" onclick="bulkAction('stop')" style="padding:4px 10px;font-size:12px">⏸ Остановить все</button>
+  <button class="btn-action compact c-green" onclick="bulkAction('start')" style="padding:4px 10px;font-size:12px">▶ Запустить все</button>
   <span class="text-dim" style="font-size:11px;margin-left:auto">применяется ко всем установленным сервисам параллельно</span>
 </div>
 
@@ -574,7 +570,7 @@ async function openServiceModal(id) {
           ${svc._installed.last_auto_update_ok === 0 ? '<span class="text-err">⚠ с ошибкой</span>' : ''}
         </p>
       ` : '<p class="fs-sm text-dim mt-2" style="margin-bottom:0">Образ ни разу не обновлялся (стоит первоначальная версия)</p>'}
-      <button class="btn-action" style="margin-top:8px" onclick="saveServiceSettings('${escapeHtml(svc.id)}')">💾 Сохранить настройки</button>
+      <button class="btn-action compact" style="margin-top:8px" onclick="saveServiceSettings('${escapeHtml(svc.id)}')">💾 Сохранить настройки</button>
     </div>` : ''}
     ${svc.post_install ? `
     <div class="modal-section">
@@ -770,17 +766,17 @@ function renderInstalledActions(svc) {
   const parts = [];
   // Все кнопки одной шириной/стилем — class .btn-action (variants c-*).
   if (webUrl) {
-    parts.push(`<a class="btn-action c-blue" style="text-decoration:none" href="${escapeHtml(webUrl)}" target="_blank" rel="noopener" aria-label="Открыть портал сервиса">🔗 Открыть</a>`);
+    parts.push(`<a class="btn-action compact c-blue" style="text-decoration:none" href="${escapeHtml(webUrl)}" target="_blank" rel="noopener" aria-label="Открыть портал сервиса">🔗 Открыть</a>`);
   }
-  parts.push(`<button class="btn-action" onclick="showServiceLogs('${escapeHtml(svc.id)}')" aria-label="Показать логи">📜 Логи</button>`);
+  parts.push(`<button class="btn-action compact" onclick="showServiceLogs('${escapeHtml(svc.id)}')" aria-label="Показать логи">📜 Логи</button>`);
   if (isRunning) {
-    parts.push(`<button class="btn-action" onclick="serviceAction('${escapeHtml(svc.id)}','restart',this)" aria-label="Перезапустить сервис">↻ Перезапустить</button>`);
-    parts.push(`<button class="btn-action c-amber" onclick="serviceAction('${escapeHtml(svc.id)}','stop',this)" aria-label="Остановить сервис">⏸ Остановить</button>`);
+    parts.push(`<button class="btn-action compact" onclick="serviceAction('${escapeHtml(svc.id)}','restart',this)" aria-label="Перезапустить сервис">↻ Перезапустить</button>`);
+    parts.push(`<button class="btn-action compact c-amber" onclick="serviceAction('${escapeHtml(svc.id)}','stop',this)" aria-label="Остановить сервис">⏸ Остановить</button>`);
   } else {
-    parts.push(`<button class="btn-action c-green" onclick="serviceAction('${escapeHtml(svc.id)}','start',this)" aria-label="Запустить сервис">▶ Запустить</button>`);
+    parts.push(`<button class="btn-action compact c-green" onclick="serviceAction('${escapeHtml(svc.id)}','start',this)" aria-label="Запустить сервис">▶ Запустить</button>`);
   }
-  parts.push(`<button class="btn-action c-blue" onclick="updateService('${escapeHtml(svc.id)}')" aria-label="Обновить образ сервиса">⬆ Обновить</button>`);
-  parts.push(`<button class="btn-action c-red" onclick="uninstallService('${escapeJs(svc.id)}', '${escapeJs(svc.name)}')" aria-label="Удалить сервис">🗑 Удалить</button>`);
+  parts.push(`<button class="btn-action compact c-blue" onclick="updateService('${escapeHtml(svc.id)}')" aria-label="Обновить образ сервиса">⬆ Обновить</button>`);
+  parts.push(`<button class="btn-action compact c-red" onclick="uninstallService('${escapeJs(svc.id)}', '${escapeJs(svc.name)}')" aria-label="Удалить сервис">🗑 Удалить</button>`);
   return parts.join('');
 }
 
@@ -848,7 +844,7 @@ async function showChangelogPreview(id) {
         </div>
         <div class="modal-actions">
           <button class="btn-close" onclick="window._changelogResolve(false);openServiceModal('${escapeHtml(id)}')">Отмена</button>
-          <button class="btn-action c-blue" onclick="window._changelogResolve(true)">⬆ Обновить</button>
+          <button class="btn-action compact c-blue" onclick="window._changelogResolve(true)">⬆ Обновить</button>
         </div>`;
       window._changelogResolve = (ok) => {
         delete window._changelogResolve;
@@ -1018,7 +1014,7 @@ async function showServiceLogs(id) {
         <label style="margin-left:auto">
           <input type="checkbox" id="logs-autoscroll" checked onchange="_logsAutoScroll=this.checked"> авто-скролл
         </label>
-        <button class="btn-action" style="padding:3px 8px;font-size:11px" onclick="clearLogsView()">очистить</button>
+        <button class="btn-action compact" style="padding:3px 8px;font-size:11px" onclick="clearLogsView()">очистить</button>
       </div>
       <pre class="post-install" id="svc-logs" style="max-height:420px;overflow-y:auto;font-size:11px;font-family:var(--mono);line-height:1.4">подключение к stream…</pre>
       <p class="fs-sm text-dim mt-2" style="margin-bottom:0">Буфер: <span id="logs-lines-count">0</span> строк · ⚡ новые строки приходят в реальном времени</p>
@@ -1347,9 +1343,9 @@ function profileCard(p) {
         ${p.estimated_disk_gb ? `<span class="badge">${p.estimated_disk_gb} GB disk</span>` : ''}
       </div>
       <div style="display: flex; gap: 6px; margin-top: 10px;">
-        <button class="btn-action" style="flex:1" onclick="showProfileDetails('${escapeHtml(p.id)}')">📋 Подробнее</button>
+        <button class="btn-action compact" style="flex:1" onclick="showProfileDetails('${escapeHtml(p.id)}')">📋 Подробнее</button>
         ${ready
-          ? '<button class="btn-action" style="flex:1;color:var(--ok);border-color:rgba(29,158,117,0.4)" disabled>✓ Готов</button>'
+          ? '<button class="btn-action compact" style="flex:1;color:var(--ok);border-color:rgba(29,158,117,0.4)" disabled>✓ Готов</button>'
           : `<button class="btn-primary" style="flex:1;background:${safeColor(p.color) ||'var(--accent)'};border-color:${safeColor(p.color) ||'var(--accent)'}" onclick="installProfile('${escapeHtml(p.id)}')">Установить пакет</button>`
         }
       </div>

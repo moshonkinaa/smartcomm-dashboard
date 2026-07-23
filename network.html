@@ -13,9 +13,9 @@
 <style>
   /* Дизайн-токены (CSS-переменные) вынесены в /tokens.css. */
   /* Btn-action style — синхронизировано с дашбордом */
-  .btn-action { display: inline-flex; align-items: center; gap: 8px; padding: 10px 14px; font: inherit; font-size: 13px; font-weight: 500; border-radius: 10px; cursor: pointer; border: 1px solid; background: transparent; transition: transform 0.1s, filter 0.15s; min-height: 40px; -webkit-tap-highlight-color: transparent; }
-  /* .btn-action:active + .c-* → /components.css (var-based). База .btn-action ниже локальна. */
-  .btn-action svg { width: 18px; height: 18px; stroke-width: 1.8; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; }
+  /* .btn-action (база + :active + .c-*) → /components.css (единая система). */
+  .btn-action { justify-content: normal; }   /* delta: network не центрировал (canonical=center) */
+  .btn-action svg { fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; }   /* delta: stroke-иконки (width/height/stroke-width из canonical) */
   /* Help-модалки: collapsible sections (общий стиль с index.html) */
   .help-sect { border-bottom: 1px solid var(--border); padding: 4px 0; }
   .help-sect:last-of-type { border-bottom: none; }

@@ -2,6 +2,19 @@
 
 Все значимые изменения проекта. Формат — Keep a Changelog + SemVer.
 
+## 3.7.2 — 2026-07-23
+
+**Дизайн-система: завершение нормализации `.btn-action` (единая база + `.compact`-вариант).**
+
+В 3.7.1 цвета `.c-*` уже стали общими и тема-адаптивными (`var()`), а база кнопки оставалась локальной в трёх версиях. Теперь и она единая.
+
+### Changed
+- **Canonical `.btn-action`** (outline-база + `svg` 18px) вынесен в `components.css`. index использует как есть; network — с delta `justify-content:normal` (не центрировал) + delta `svg` (stroke-иконки: `fill/stroke/linecap/linejoin`, размеры из canonical).
+- **`.btn-action.compact`** — компактный solid-вариант магазина сервисов (`padding 7px 13px`, `min-height 0`, `border-radius --r-md`, `:hover`/`:disabled`/svg 13px) как модификатор в `components.css`. Кнопки services размечены `class="btn-action compact …"` (18 шт.).
+- Порядок в `components.css`: база → `.compact` → `.c-*` (тинт перебивает `.compact`-фон) → `:active`.
+
+Внешний вид не изменился — **попиксельно**: диф computed-стилей кнопок index/network/services в светлой и тёмной темах (**28 проверок, 0 расхождений**). Все расходящиеся классы дизайн-системы теперь нормализованы (canonical + delta). `.chip`/`.dot` оставлены локальными осознанно (поведенческие различия).
+
 ## 3.7.1 — 2026-07-22
 
 **Дизайн-система: унифицирована цветовая система `.btn-action.c-*` (тема-адаптивно).**

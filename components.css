@@ -95,12 +95,18 @@
 /* ---- Modal ---- */
 .modal-box { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 20px; max-width: 640px; width: 100%; max-height: 90vh; overflow-y: auto; }
 
-/* ---- Action button: цветовые варианты (единая, тема-адаптивная система).
-   База .btn-action (геометрия) осталась на страницах — она РАЗНАЯ: index/network —
-   outline 40px, services — компактная solid. А цвета теперь общие и на var()
-   (раньше index/network держали хардкод-hex → цветные кнопки не адаптировались к
-   тёмной теме). c-amber намеренно #BA7517/#EF9F27 (var(--warn) проваливает контраст
-   на светлом фоне). ---- */
+/* ---- Action button (.btn-action): единая система ----
+   Outline-база (index/network, 40px). Компактный solid-вариант — .btn-action.compact
+   (магазин сервисов). Цвета c-* общие и тема-адаптивные на var() (раньше index/network
+   держали хардкод-hex → цветные кнопки не адаптировались к тёмной теме). c-amber
+   намеренно #BA7517/#EF9F27 — var(--warn) проваливает контраст на светлом фоне.
+   Порядок важен: база → .compact → c-* (тинт перебивает .compact-фон) → :active. */
+.btn-action { display: inline-flex; flex-direction: row; align-items: center; justify-content: center; gap: 8px; padding: 10px 14px; font: inherit; font-size: 13px; font-weight: 500; border-radius: 10px; cursor: pointer; border: 1px solid; background: transparent; transition: transform 0.1s, filter 0.15s; min-height: 40px; -webkit-tap-highlight-color: transparent; }
+.btn-action svg { width: 18px; height: 18px; stroke-width: 1.8; }
+.btn-action.compact { padding: 7px 13px; font-size: 12.5px; gap: 5px; border-radius: var(--r-md); min-height: 0; background: var(--bg-inner); color: var(--text); border-color: var(--border); transition: none; justify-content: normal; }
+.btn-action.compact svg { width: 13px; height: 13px; }
+.btn-action.compact:hover { background: var(--bg-hover); }
+.btn-action.compact:disabled { opacity: 0.55; cursor: not-allowed; }
 .btn-action.c-green  { background: rgba(29,158,117,0.12); border-color: rgba(29,158,117,0.4); color: var(--ok); }
 .btn-action.c-blue   { background: rgba(55,138,221,0.12); border-color: rgba(55,138,221,0.4); color: var(--info); }
 .btn-action.c-purple { background: rgba(127,119,221,0.14); border-color: rgba(127,119,221,0.4); color: var(--purple); }
