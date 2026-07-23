@@ -443,13 +443,102 @@ init_db()
 apply_pending_migrations()
 
 
+# ============ Шифрование секретов at-rest (#73) ============
+# Секрет-колонки (пароли устройств, snmp-community) и секрет-настройки
+# (iridium/mikrotik-пароли, fleet-токен) шифруются Fernet-ключом в файле 0600
+# ОТДЕЛЬНО от inventory.db (ключ НЕ попадает в бэкапы inventory_*.db) — кража копии
+# БД/бэкапа не раскрывает секреты. Значения хранятся с префиксом enc:v1:.
+from cryptography.fernet import Fernet as _Fernet
+
+_SECRET_KEY_PATH = DB_PATH.parent / "secret.key"
+_ENC_PREFIX = "enc:v1:"
+_SECRET_SETTING_KEYS = {"iridium_password", "mikrotik_password", "fleet_token"}
+
+
+def _load_or_create_fernet():
+    try:
+        if _SECRET_KEY_PATH.exists():
+            return _Fernet(_SECRET_KEY_PATH.read_bytes())
+        key = _Fernet.generate_key()
+        _SECRET_KEY_PATH.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(_SECRET_KEY_PATH), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(key)
+        return _Fernet(key)
+    except Exception:
+        return None   # нет прав/ключа — работаем без шифрования (см. enc/dec fallback)
+
+
+_FERNET = _load_or_create_fernet()
+
+
+def enc_secret(value):
+    """Шифрует строку-секрет для хранения. None/'' — как есть. Идемпотентно
+    (уже-enc не перешифровываем). Без ключа — храним как есть (не ломаем функционал)."""
+    if not value or not isinstance(value, str) or value.startswith(_ENC_PREFIX):
+        return value
+    if _FERNET is None:
+        return value
+    return _ENC_PREFIX + _FERNET.encrypt(value.encode()).decode()
+
+
+def dec_secret(stored):
+    """Расшифровывает хранимое значение. Не-enc (legacy plaintext) — как есть."""
+    if not stored or not isinstance(stored, str) or not stored.startswith(_ENC_PREFIX):
+        return stored
+    if _FERNET is None:
+        return stored
+    try:
+        return _FERNET.decrypt(stored[len(_ENC_PREFIX):].encode()).decode()
+    except Exception:
+        return stored   # неверный ключ/повреждение — не роняем
+
+
+def _migrate_encrypt_secrets():
+    """Одноразово шифруем существующие plaintext-секреты (идемпотентно — enc-значения
+    пропускаем). Вызывается при инициализации БД."""
+    if _FERNET is None:
+        return
+    try:
+        with db() as c:
+            for r in c.execute("SELECT id, password FROM device_credentials").fetchall():
+                p = r["password"]
+                if p and isinstance(p, str) and not p.startswith(_ENC_PREFIX):
+                    c.execute("UPDATE device_credentials SET password=? WHERE id=?",
+                              (enc_secret(p), r["id"]))
+            cols = [x[1] for x in c.execute("PRAGMA table_info(devices)").fetchall()]
+            for col in ("snmp_community", "password"):
+                if col not in cols:
+                    continue
+                for r in c.execute(f"SELECT id, {col} AS v FROM devices").fetchall():
+                    v = r["v"]
+                    if v and isinstance(v, str) and not v.startswith(_ENC_PREFIX):
+                        c.execute(f"UPDATE devices SET {col}=? WHERE id=?",
+                                  (enc_secret(v), r["id"]))
+            for key in _SECRET_SETTING_KEYS:
+                r = c.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+                if r and r["value"] and isinstance(r["value"], str) \
+                        and not r["value"].startswith(_ENC_PREFIX):
+                    c.execute("UPDATE settings SET value=? WHERE key=?",
+                              (enc_secret(r["value"]), key))
+    except Exception as e:
+        print(f"[secrets] migration warn: {e}")
+
+
+_migrate_encrypt_secrets()   # #73: одноразовая миграция plaintext→enc при импорте
+
+
 def setting_get(key, default=None):
     with db() as c:
         r = c.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
-    return r["value"] if r else default
+    if not r:
+        return default
+    return dec_secret(r["value"]) if key in _SECRET_SETTING_KEYS else r["value"]
 
 
 def setting_set(key, value):
+    if key in _SECRET_SETTING_KEYS:
+        value = enc_secret(value)
     with db() as c:
         c.execute("""INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
                      ON CONFLICT(key) DO UPDATE SET value = excluded.value,
@@ -1481,7 +1570,12 @@ def list_credentials(did):
             "SELECT * FROM device_credentials WHERE device_id = ? ORDER BY id",
             (did,)
         ).fetchall()
-    return jsonify({"credentials": [dict(r) for r in rows]})
+    out = []
+    for r in rows:
+        row = dict(r)
+        row["password"] = dec_secret(row.get("password"))   # #73: at-rest → plaintext для оператора
+        out.append(row)
+    return jsonify({"credentials": out})
 
 
 @bp.route("/api/network/devices/<int:did>/credentials", methods=["POST"])
@@ -1493,7 +1587,7 @@ def add_credential(did):
             INSERT INTO device_credentials (device_id, label, username, password, notes,
                                             created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (did, d.get("label"), d.get("username"), d.get("password"),
+        """, (did, d.get("label"), d.get("username"), enc_secret(d.get("password")),
               d.get("notes"), now, now))
     # SECURITY: НИКОГДА не пишем password в audit — даже короткий хеш. Только метаданные.
     _audit("credential_create", target=str(cur.lastrowid),
@@ -1511,7 +1605,7 @@ def update_credential(cid):
     for f in fields:
         if f in d:
             sets.append(f"{f} = ?")
-            vals.append(d[f])
+            vals.append(enc_secret(d[f]) if f == "password" else d[f])   # #73
             changed_fields.append(f)
     if not sets:
         return jsonify({"ok": False, "error": "no fields"}), 400
@@ -1770,7 +1864,7 @@ def snmp_probe_device(did):
         dev = c.execute("SELECT * FROM devices WHERE id = ?", (did,)).fetchone()
     if not dev or not dev["ip"]:
         return jsonify({"ok": False, "error": "no IP"}), 400
-    community = d.get("community") or dev["snmp_community"] or "public"
+    community = d.get("community") or dec_secret(dev["snmp_community"]) or "public"   # #73
     save = d.get("save", True)
     try:
         info = snmp_probe(dev["ip"], community)
@@ -1782,7 +1876,7 @@ def snmp_probe_device(did):
     if save:
         with db() as c:
             sets = ["updated_at = ?", "snmp_community = ?"]
-            vals = [int(time.time()), community]
+            vals = [int(time.time()), enc_secret(community)]   # #73: at-rest
             if not dev["hostname"] and info.get("sysName"):
                 sets.append("hostname = ?"); vals.append(info["sysName"][:120])
             if not dev["notes"] and info.get("sysDescr"):
