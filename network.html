@@ -1262,14 +1262,14 @@ async function fetchAudit(deviceId) {
 }
 
 // ============ SSH ============
-// Открывает webssh с авто-подбором пароля из credentials карточки.
+// Открывает webssh с авто-подстановкой логина + пароль-в-буфер.
 // Логика:
-//   0 credentials → открыть webssh с дефолтным юзером 'pi', пароль вводится руками
-//   1 credential  → авто-подставить логин+пароль
+//   0 credentials → webssh с дефолтным юзером 'pi', пароль вводится руками
+//   1 credential  → префилл логина + пароль в буфер обмена
 //   2+ creds      → popup-выбор «admin / viewer / root»
 //
-// SECURITY: пароль уходит в URL → виден в history браузера + логах webssh.
-// Это приемлемо для LAN-only инструмента где сам доступ к дашборду уже под auth'ом.
+// #76: пароль БОЛЬШЕ НЕ уходит в URL (был виден в history браузера + GET-логах
+// webssh) — кладём в буфер обмена, оператор вставляет в поле webssh.
 async function openWebSSH(deviceId, ip) {
   let creds = [];
   if (deviceId) {
@@ -1293,10 +1293,34 @@ async function openWebSSH(deviceId, ip) {
 
 function _openWebSSHWithCred(ip, user, password) {
   const host = location.hostname || '127.0.0.1';
-  let url = 'http://' + host + ':8022/?hostname=' + encodeURIComponent(ip)
+  // #76: только hostname/port/username в URL (не секрет). Пароль — в буфер.
+  const url = 'http://' + host + ':8022/?hostname=' + encodeURIComponent(ip)
           + '&port=22&username=' + encodeURIComponent(user || 'pi');
-  if (password) url += '&password=' + encodeURIComponent(password);
   window.open(url, 'webssh-' + ip, 'width=1000,height=700');
+  if (password) {
+    showToast(_copyText(password)
+      ? 'Пароль скопирован — вставь в поле webssh (Ctrl+V)'
+      : 'Пароль: ' + password);
+  }
+}
+
+// Копирование в буфер с fallback для http/не-secure контекста (дашборд на http
+// LAN → navigator.clipboard недоступен, используем legacy execCommand).
+function _copyText(t) {
+  try {
+    if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(t);
+      return true;
+    }
+  } catch (e) { /* fallthrough */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = t; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  } catch (e) { return false; }
 }
 
 function _showSSHPicker(ip, creds) {

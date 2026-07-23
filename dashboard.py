@@ -106,7 +106,7 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "3.8.0"
+VERSION = "3.8.1"
 RELEASE_DATE = "2026-07-22"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # SECURITY: допустимый идентификатор сервиса (идёт в filesystem-путь + docker compose).
@@ -301,9 +301,12 @@ LOCK = threading.Lock()
 # SECURITY/robustness (F5): PREV_* читаются/пишутся из sampler-потока И из
 # build_status_payload/api_history одновременно → без лока изредка неверные rate.
 _METRIC_LOCK = threading.Lock()
-PREV_CPU = None
-PREV_CPU_CORES = {}
-PREV_NET = {"rx": 0, "tx": 0, "ts": time.time()}
+# Prev-состояние для расчёта rate (CPU/сети) РАЗДЕЛЕНО (#81.4): request-path
+# (build_status_payload и live-графики) и фоновый sampler держат СВОЙ store. Раньше
+# делили одни глобалы → sampler каждые 60с обнулял dt для следующего /api/status и
+# наоборот → окно расчёта rate схлопывалось, значения были шумные/заниженные.
+_STATUS_PREV  = {"cpu": None, "cpu_cores": {}, "net": {"rx": 0, "tx": 0, "ts": time.time()}}
+_SAMPLER_PREV = {"cpu": None, "cpu_cores": {}, "net": {"rx": 0, "tx": 0, "ts": time.time()}}
 
 # ============ Persisted metrics history (survives restarts) ============
 METRICS_DB = "/var/lib/smartcomm-dashboard/metrics.db"
@@ -531,28 +534,32 @@ def mem_info():
     }
 
 
-def cpu_usage_pct():
-    global PREV_CPU
+def cpu_usage_pct(store=None):
+    """store: контейнер prev-состояния. None → _STATUS_PREV (request-path). Sampler
+    передаёт _SAMPLER_PREV, чтобы не делить окно расчёта rate (#81.4)."""
+    st = store if store is not None else _STATUS_PREV
     try:
         with open("/proc/stat") as f:
             parts = list(map(int, f.readline().split()[1:8]))
         total = sum(parts)
         idle = parts[3] + parts[4]
         with _METRIC_LOCK:
-            if PREV_CPU:
-                dt = total - PREV_CPU[0]
-                di = idle - PREV_CPU[1]
+            pc = st["cpu"]
+            if pc:
+                dt = total - pc[0]
+                di = idle - pc[1]
                 pct = round(100 * (dt - di) / dt, 1) if dt else 0
             else:
                 pct = 0
-            PREV_CPU = (total, idle)
+            st["cpu"] = (total, idle)
         return pct
     except Exception:
         return 0
 
 
-def cpu_usage_per_core():
+def cpu_usage_per_core(store=None):
     """Returns list of % usage per core, e.g. [12.3, 8.1, 0.5, 1.2]."""
+    st = store if store is not None else _STATUS_PREV
     result = []
     try:
         with open("/proc/stat") as f:
@@ -565,14 +572,14 @@ def cpu_usage_per_core():
                 total = sum(vals)
                 idle = vals[3] + vals[4]
                 with _METRIC_LOCK:
-                    prev = PREV_CPU_CORES.get(name)
+                    prev = st["cpu_cores"].get(name)
                     if prev:
                         dt = total - prev[0]
                         di = idle - prev[1]
                         pct = round(100 * (dt - di) / dt, 1) if dt else 0
                     else:
                         pct = 0
-                    PREV_CPU_CORES[name] = (total, idle)
+                    st["cpu_cores"][name] = (total, idle)
                 result.append(pct)
     except Exception:
         pass
@@ -658,8 +665,9 @@ def primary_ip():
         return None
 
 
-def net_rate(iface=None):
-    global PREV_NET
+def net_rate(iface=None, store=None):
+    """store: None → _STATUS_PREV (request-path); sampler передаёт _SAMPLER_PREV (#81.4)."""
+    st = store if store is not None else _STATUS_PREV
     if iface is None:
         iface = primary_iface()
     try:
@@ -671,12 +679,13 @@ def net_rate(iface=None):
                     rx, tx = int(fields[0]), int(fields[8])
                     now = time.time()
                     with _METRIC_LOCK:
-                        dt = max(0.5, now - PREV_NET["ts"])
-                        drx = max(0, rx - PREV_NET["rx"])
-                        dtx = max(0, tx - PREV_NET["tx"])
+                        pn = st["net"]
+                        dt = max(0.5, now - pn["ts"])
+                        drx = max(0, rx - pn["rx"])
+                        dtx = max(0, tx - pn["tx"])
                         rx_rate = int(drx / dt)
                         tx_rate = int(dtx / dt)
-                        PREV_NET = {"rx": rx, "tx": tx, "ts": now}
+                        st["net"] = {"rx": rx, "tx": tx, "ts": now}
                     return rx_rate, tx_rate, rx, tx
     except Exception:
         pass
@@ -1626,10 +1635,10 @@ def sampler():
     while True:
         try:
             t = cpu_temp_c()
-            c = cpu_usage_pct()
+            c = cpu_usage_pct(_SAMPLER_PREV)          # #81.4: свой store, не делим с request-path
             m = mem_info()
             d = disk_info("/")
-            rx_rate, tx_rate, _, _ = net_rate()
+            rx_rate, tx_rate, _, _ = net_rate(store=_SAMPLER_PREV)
             net_kbps = round((rx_rate + tx_rate) / 1024, 2)
             ts = int(time.time())
             with LOCK:

@@ -6,6 +6,7 @@ import json
 import time
 import urllib.request
 import urllib.error
+import ssl
 import base64
 import re
 import sqlite3
@@ -71,14 +72,29 @@ def _req(network_bp, path, method="GET", body=None, timeout=4):
     pw = _settings_get(network_bp, "mikrotik_password", "")
     if not pw:
         return None
-    url = f"http://{ip}/rest/{path.lstrip('/')}"
+    # #75: опционально HTTPS (www-ssl) — шифрует Basic-auth в проводе (защита пароля
+    # от пассивного сниффинга). Гейт настройкой mikrotik_https: по умолчанию http
+    # (не ломаем контроллеры, где на роутере www-ssl не включён — оператор включает
+    # www-ssl на роутере, потом флипает настройку). Роутер отдаёт self-signed cert
+    # (меняется при пересоздании), поэтому verify off: цель — шифрование, не
+    # cert-auth; на доверенной LAN контроллер↔его роутер этого достаточно. Пиннинг
+    # cert — отдельный техдолг (защита от активного MITM).
+    use_https = str(_settings_get(network_bp, "mikrotik_https", "")).strip().lower() \
+        in ("1", "true", "yes", "on")
+    scheme = "https" if use_https else "http"
+    url = f"{scheme}://{ip}/rest/{path.lstrip('/')}"
+    ctx = None
+    if use_https:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
     try:
         req = urllib.request.Request(url, method=method)
         req.add_header("Authorization", _basic_auth(user, pw))
         if body is not None:
             req.add_header("Content-Type", "application/json")
             req.data = json.dumps(body).encode()
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
             raw = r.read()
         # MikroTik (особенно WinBox на русской Windows) пишет comments в CP1251,
         # не в UTF-8. Сначала пробуем UTF-8 strict, fallback к CP1251.

@@ -996,7 +996,7 @@ def nmap_scan(subnet):
         raise RuntimeError(f"invalid scan target: {subnet!r}")
     out = subprocess.run(
         ["sudo", "nmap", "-sn", "-PR", "-oX", "-", "--", subnet],
-        capture_output=True, text=True, timeout=180,
+        capture_output=True, text=True, timeout=90,    # #81.2: -sn -PR /24 укладывается <90с; жёсткий кап
     )
     if out.returncode != 0:
         raise RuntimeError(f"nmap exit {out.returncode}: {out.stderr[:200]}")
@@ -1093,7 +1093,7 @@ def nmap_service_scan(ip):
         ["sudo", "nmap", "-sV", "-T4", "--version-intensity", "3",
          "-p", "22,80,443,554,1883,5000,8000,8080,8443,8888,9000,9100,1900",
          "-oX", "-", "--", ip],
-        capture_output=True, text=True, timeout=90,
+        capture_output=True, text=True, timeout=45,   # #81.2: -sV 13 портов укладывается <45с; жёсткий кап чтобы не держать waitress-поток
     )
     if out.returncode != 0:
         raise RuntimeError(f"nmap exit {out.returncode}: {out.stderr[:200]}")
