@@ -592,6 +592,7 @@ def row_to_dict(row):
 # ============ AUTH: пароли, сессии, аудит ============
 
 SESSION_TTL_SEC = 30 * 86400   # 30 дней
+LAST_SEEN_THROTTLE_SEC = 90    # last_seen пишем не чаще, чем раз в 90с на сессию
 AUDIT_RETENTION_AUTH_DAYS = 90
 
 def auth_hash_password(password, salt=None):
@@ -703,10 +704,14 @@ def auth_get_session(sid):
             if (now - row["created_at"]) > SESSION_TTL_SEC:
                 c.execute("DELETE FROM auth_sessions WHERE sid = ?", (sid,))
                 return None
-            c.execute(
-                "UPDATE auth_sessions SET last_seen = ? WHERE sid = ?",
-                (now, sid)
-            )
+            # THROTTLE: раньше last_seen писался на КАЖДЫЙ запрос → churn WAL.
+            # Пишем не чаще раза в LAST_SEEN_THROTTLE_SEC на сессию (для UI
+            # 90с-гранулярность «последней активности» достаточна).
+            if (now - (row["last_seen"] or 0)) >= LAST_SEEN_THROTTLE_SEC:
+                c.execute(
+                    "UPDATE auth_sessions SET last_seen = ? WHERE sid = ?",
+                    (now, sid)
+                )
         return dict(row)
     except sqlite3.OperationalError:
         # database is locked / busy — не валим весь запрос. Повторно прочитаем

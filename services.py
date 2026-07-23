@@ -402,23 +402,33 @@ def list_installed():
 
 
 def compute_uptime_pct(inst, window_sec=86400):
-    """% времени когда сервис был running за последние window_sec.
-    Использует uptime_running_seconds + текущий running-интервал если активен."""
+    """% времени когда сервис был running ВНУТРИ окна window_sec.
+
+    Раньше брали lifetime `uptime_running_seconds` и клампили к окну через min() —
+    из-за чего любой сервис, проживший дольше окна, всегда показывал ~100% за 24ч
+    (даже если только что упал). Считаем по последней смене статуса
+    `last_status_change_at` — корректно при ≤1 смене в окне (точнее без полной
+    истории статусов нельзя, флаппинг занижаем консервативно)."""
     if not inst:
         return None
-    uptime_acc = inst.get("uptime_running_seconds") or 0
-    last_change = inst.get("last_status_change_at")
-    installed_at = inst.get("installed_at") or 0
     now = int(time.time())
-    # Если сейчас running и есть последняя смена статуса — добавляем текущий интервал
-    if inst.get("status") == "running" and last_change:
-        uptime_acc += max(0, now - last_change)
-    # Окно: с момента install ИЛИ window_sec — что короче
+    installed_at = inst.get("installed_at") or 0
+    last_change = inst.get("last_status_change_at") or installed_at or now
+    running = inst.get("status") == "running"
+    # Окно: с момента install ИЛИ window_sec — что короче (нельзя считать uptime
+    # за время до установки).
     window_start = max(installed_at, now - window_sec)
     actual_window = now - window_start
     if actual_window <= 0:
         return None
-    return round(100 * min(uptime_acc, actual_window) / actual_window, 1)
+    if running:
+        # running с момента last_change; до него (в окне) сервис был НЕ running
+        up = now - max(last_change, window_start)
+    else:
+        # stopped с момента last_change; до него (в окне) — был running
+        up = (min(last_change, now) - window_start) if last_change > window_start else 0
+    up = max(0, min(up, actual_window))
+    return round(100 * up / actual_window, 1)
 
 
 def update_settings(service_id, notes=None, auto_update=None):
@@ -846,36 +856,6 @@ def get_compose_network_info(service_id):
         except (yaml.YAMLError, AttributeError, ValueError):
             pass
     return info
-
-
-def get_dependencies(service_id):
-    """Возвращает {requires: [..], required_by: [..]} — кто нужен этому сервису
-    и кто зависит от него. Парсит depends_on из compose.yml и сравнивает
-    container_name между всеми установленными сервисами."""
-    sdir = _service_dir(service_id)
-    compose_path = sdir / "compose.yml"
-    if not compose_path.exists() or not _HAS_YAML:
-        return {"requires": [], "required_by": []}
-    try:
-        text = compose_path.read_text(encoding="utf-8")
-        parsed = yaml.safe_load(text) or {}
-    except (OSError, yaml.YAMLError):
-        return {"requires": [], "required_by": []}
-
-    # Внутри одного compose — depends_on внутренние (service-to-service в том же compose).
-    # Мы НЕ показываем эти — пользователю важны inter-service зависимости (если бы
-    # они были в разных compose). На практике каждый сервис self-contained.
-    # Поэтому: requires/required_by = пусто. Возвращаем пустыми для backward-compat.
-    # Если будут cross-service deps (например internal_network shared) — добавим позже.
-    return {"requires": [], "required_by": []}
-
-
-def list_internal_containers(parsed_compose):
-    """Все container_name из compose dict — нужно для cross-reference."""
-    out = []
-    for svc_name, svc_cfg in (parsed_compose.get("services") or {}).items():
-        out.append(svc_cfg.get("container_name") or svc_name)
-    return out
 
 
 # ============ Changelog preview (GitHub releases API) ============
@@ -1345,32 +1325,38 @@ def get_service_stats(service_id):
 
 def _save_metrics_sample():
     """Сохранить snapshot _STATS (per-container) → service_metrics (per-service aggregate).
-    Ring buffer: удаляем строки старше 24 часов раз в 12 циклов (~6 минут)."""
+    Ring buffer: удаляем строки старше 24 часов раз в 12 циклов (~6 минут).
+
+    RELIABILITY (#81.5): сперва собираем все stats (чтение+parse compose.yml всех
+    сервисов — файловый I/O), ПОТОМ короткая write-txn на вставку. Раньше write-txn
+    держалась открытой на весь цикл чтения compose → долгая блокировка БД."""
     installed = list_installed()
     if not installed:
         return
     now = int(time.time())
+    # 1) считаем stats БЕЗ открытой транзакции
+    rows = []
+    for inst in installed:
+        stats = get_service_stats(inst["id"])
+        if stats:
+            rows.append((inst["id"], now, stats["cpu_pct"], stats["mem_mb"],
+                         stats["mem_pct"], stats["net_rx_mb"], stats["net_tx_mb"]))
+    # 2) короткая write-txn
     try:
         with sqlite3.connect(DB_PATH, timeout=5.0) as conn:
             cur = conn.cursor()
-            for inst in installed:
-                stats = get_service_stats(inst["id"])
-                if not stats:
-                    continue
-                cur.execute("""
+            if rows:
+                cur.executemany("""
                     INSERT INTO service_metrics
                         (service_id, ts, cpu_pct, mem_mb, mem_pct, net_rx_mb, net_tx_mb)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (inst["id"], now, stats["cpu_pct"], stats["mem_mb"],
-                      stats["mem_pct"], stats["net_rx_mb"], stats["net_tx_mb"]))
-            # Retention: ring buffer 24h. Delete редко (раз в ~6 мин) чтобы не
-            # нагружать БД при каждом сэмпле.
+                """, rows)
+            # Retention: ring buffer 24h. Delete редко (раз в ~6 мин).
             global _METRICS_PRUNE_COUNTER
             _METRICS_PRUNE_COUNTER += 1
             if _METRICS_PRUNE_COUNTER >= 12:
                 _METRICS_PRUNE_COUNTER = 0
-                cutoff = now - 86400
-                cur.execute("DELETE FROM service_metrics WHERE ts < ?", (cutoff,))
+                cur.execute("DELETE FROM service_metrics WHERE ts < ?", (now - 86400,))
     except sqlite3.Error as e:
         print(f"[services-metrics] db error: {e}")
 

@@ -106,7 +106,7 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "3.7.2"
+VERSION = "3.8.0"
 RELEASE_DATE = "2026-07-22"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # SECURITY: допустимый идентификатор сервиса (идёт в filesystem-путь + docker compose).
@@ -929,26 +929,26 @@ def _ir_db():   return iridium_paths()[2]
 _IRIDIUM_VERSION_CACHE = {"value": None}
 
 
-def iridium_version():
-    """Parse 'Server Version: Pro or Lite:42647 (Jun  1 2026, 10:32:17)'.
-    Кешируем ТОЛЬКО успешный результат вручную — раньше был @lru_cache, который
-    навсегда кешировал None если при первом вызове irserver был недоступен
-    (таймаут/перезапуск), и версия iRidium пропадала до рестарта дашборда."""
+def _refresh_iridium_version():
+    """Блокирующий `sudo IR_BIN --version` (timeout 10с). Вызывается ТОЛЬКО из
+    фонового _iridium_api_sampler — НЕ из request/heartbeat-потока (#81.1). Успех
+    кешируем навсегда; до успеха пробуем каждый тик sampler'а (раз в 30с)."""
     c = _IRIDIUM_VERSION_CACHE
     if c["value"] is not None:
-        return c["value"]
-    # PERF (F8): неудачу кешируем НА КОРОТКО (45с), а не навсегда. Иначе, пока
-    # irserver недоступен/перезапускается, `sudo IR_BIN --version` (timeout 10с)
-    # дёргался на КАЖДЫЙ /api/status и heartbeat → подвисания. Успех — навсегда.
-    if c.get("retry_after", 0) > time.time():
-        return None
+        return
     out = sh(f"sudo {IR_BIN} --version 2>&1 | head -1", timeout=10)
     m = re.search(r"Server Version:\s*(.+?):(\d+)\s*\(([^)]+)\)", out)
     if m:
         c["value"] = {"edition": m.group(1).strip(), "build": m.group(2), "date": m.group(3)}
-        return c["value"]
-    c["retry_after"] = time.time() + 45
-    return None
+
+
+def iridium_version():
+    """Parse 'Server Version: Pro or Lite:42647 (Jun  1 2026, 10:32:17)'.
+    RELIABILITY (#81.1): только ЧИТАЕТ кеш — не блокирует. Реальный `sudo --version`
+    тянет фоновый sampler (_refresh_iridium_version). Раньше блокирующий вызов
+    (timeout 10с) шёл прямо из build_status_payload → на первый /api/status и каждые
+    45с пока irserver недоступен, в т.ч. держал heartbeat-поток."""
+    return _IRIDIUM_VERSION_CACHE["value"]
 
 
 @time_cache(60)
@@ -1231,8 +1231,12 @@ def _iridium_api_refresh():
 
 
 def _iridium_api_sampler():
-    """Фоновый поток: 30-сек шаг. Снимает данные iRidium API, обновляет кеш."""
+    """Фоновый поток: 30-сек шаг. Снимает данные iRidium API + версию, обновляет кеш."""
     while True:
+        try:
+            _refresh_iridium_version()   # #81.1: блокирующий sudo --version — тут, не в request
+        except Exception:
+            pass
         try:
             _iridium_api_refresh()
         except Exception:
@@ -1849,6 +1853,7 @@ def build_status_payload():
     return {
         "ts": int(time.time()),
         "version": VERSION,
+        "db_integrity": dict(_DB_INTEGRITY),   # {ok, detail, checked_at} → алерт портала
         "host": os.uname().nodename,
         "platform_name": platform_name(),
         "platform_arch": os.uname().machine,
@@ -2886,9 +2891,19 @@ INVENTORY_DB = Path(os.environ.get("STATE_DIRECTORY", "/var/lib/smartcomm-dashbo
 BACKUP_RETENTION_DAYS = 30
 
 
+# Флаг целостности БД — сюрфейсится в /api/status (→ heartbeat → алерт портала),
+# чтобы оператор узнал о повреждении, а не только строчка в логе.
+_DB_INTEGRITY = {"ok": True, "detail": "", "checked_at": 0}
+
+
 def db_integrity_check():
-    """Quick integrity check at startup. If fails, log error but keep running."""
+    """Integrity check при старте. При провале РЕАГИРУЕМ: (1) сохраняем повреждённую
+    БД в inventory.CORRUPT-<ts>.db (иначе daily-backup перезатрёт хорошие копии
+    повреждённой), (2) CRITICAL в лог, (3) выставляем флаг для сюрфейса в статус.
+    Авто-restore НЕ делаем — это может потерять свежие данные; решение за оператором."""
+    _DB_INTEGRITY["checked_at"] = int(time.time())
     if not INVENTORY_DB.exists():
+        _DB_INTEGRITY.update(ok=True, detail="no db yet")
         return True
     try:
         import sqlite3
@@ -2896,11 +2911,20 @@ def db_integrity_check():
         ok = conn.execute("PRAGMA integrity_check").fetchone()[0]
         conn.close()
         if ok != "ok":
-            app.logger.error(f"inventory.db integrity: {ok}")
+            app.logger.critical(f"inventory.db ПОВРЕЖДЕНА: {ok}")
+            _DB_INTEGRITY.update(ok=False, detail=str(ok)[:200])
+            try:
+                corrupt = INVENTORY_DB.parent / f"inventory.CORRUPT-{int(time.time())}.db"
+                shutil.copy2(str(INVENTORY_DB), str(corrupt))
+                app.logger.critical(f"повреждённая БД сохранена: {corrupt}")
+            except Exception as ce:
+                app.logger.error(f"не удалось сохранить corrupt-копию: {ce}")
             return False
     except Exception as e:
         app.logger.error(f"integrity check failed: {e}")
+        _DB_INTEGRITY.update(ok=False, detail=f"check error: {str(e)[:150]}")
         return False
+    _DB_INTEGRITY.update(ok=True, detail="ok")
     return True
 
 
@@ -2941,11 +2965,41 @@ def backup_inventory():
             pass
 
 
+def _maybe_vacuum():
+    """VACUUM inventory.db не чаще раза в 7 дней (дефрагментация + возврат места
+    после DELETE-ретеншена). Метка времени персистится в файл, иначе VACUUM гонялся
+    бы на каждый рестарт сервиса. VACUUM берёт эксклюзивную блокировку — гоняем в
+    backup-loop (фоновый поток, не request-path)."""
+    marker = BACKUP_DIR / ".last_vacuum"
+    try:
+        last = float(marker.read_text().strip()) if marker.exists() else 0
+    except Exception:
+        last = 0
+    if time.time() - last < 7 * 86400:
+        return
+    if not INVENTORY_DB.exists():
+        return
+    try:
+        import sqlite3
+        conn = sqlite3.connect(str(INVENTORY_DB), timeout=30)
+        conn.execute("VACUUM")
+        conn.close()
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(str(int(time.time())))
+        app.logger.info("inventory.db VACUUM выполнен")
+    except Exception as e:
+        app.logger.warning(f"VACUUM не удался: {e}")
+
+
 def _backup_loop():
     time.sleep(300)   # wait 5 min after boot
     while True:
         try:
             backup_inventory()
+        except Exception:
+            pass
+        try:
+            _maybe_vacuum()
         except Exception:
             pass
         time.sleep(24 * 3600)

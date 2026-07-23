@@ -510,11 +510,11 @@ def sync_dhcp_to_inventory(network_bp):
                             "from": old_name, "to": comment})
             audit_entries.append((row["id"], "sync_mikrotik",
                                   f"name: '{old_name}' → '{comment}' (DHCP comment)"))
-        # Заодно сохраним static-флаг — добавим столбец если нет
-        try:
+        # Заодно сохраним static-флаг — добавим столбец если нет (run-once: раньше
+        # ALTER бросал OperationalError КАЖДЫЙ sync; теперь проверяем PRAGMA).
+        cols = [r[1] for r in con.execute("PRAGMA table_info(devices)").fetchall()]
+        if "dhcp_static" not in cols:
             con.execute("ALTER TABLE devices ADD COLUMN dhcp_static INTEGER DEFAULT 0")
-        except sqlite3.OperationalError:
-            pass
         for lease in leases:
             mac = lease["mac"]
             con.execute("UPDATE devices SET dhcp_static=? WHERE upper(mac)=?",
