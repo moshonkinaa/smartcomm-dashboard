@@ -334,6 +334,12 @@ def init_db():
             c.execute("ALTER TABLE devices ADD COLUMN monitor_on_dashboard INTEGER DEFAULT 0")
         if "dhcp_static" not in dcols:
             c.execute("ALTER TABLE devices ADD COLUMN dhcp_static INTEGER")
+        # #99: детект смены MAC при том же IP. prev_mac — прежний адрес (для оператора),
+        # mac_change_pending=1 → бейдж «MAC сменился, подтвердить».
+        if "mac_change_pending" not in dcols:
+            c.execute("ALTER TABLE devices ADD COLUMN mac_change_pending INTEGER DEFAULT 0")
+        if "prev_mac" not in dcols:
+            c.execute("ALTER TABLE devices ADD COLUMN prev_mac TEXT")
         # Несколько фото на одно устройство (раньше было одно — `<id>.<ext>` на диске)
         c.execute("""
             CREATE TABLE IF NOT EXISTS device_photos (
@@ -1114,16 +1120,38 @@ def nmap_scan(subnet):
     return hosts
 
 
+_MAC_CHANGE_INFRA_TYPES = {"network", "router", "nas", "server",
+                           "camera", "printer", "controller"}
+
+
+def _significant_device(row):
+    """«Значимая» запись — есть ручная метадата / мониторинг / статик-резервация,
+    либо это инфраструктура. Только для таких усыновляем смену MAC (см. merge_scan),
+    чтобы не склеивать случайные клиенты с рандомизацией MAC (телефоны и т.п.)."""
+    try:
+        if (row["name"] or "").strip() or (row["room"] or "").strip():
+            return True
+        if row["monitor_on_dashboard"] or row["dhcp_static"]:
+            return True
+        if (row["device_type"] or "") in _MAC_CHANGE_INFRA_TYPES:
+            return True
+    except (KeyError, IndexError, TypeError):
+        pass
+    return False
+
+
 def merge_scan(hosts):
     """Upsert nmap results into DB. Returns (new_count, updated_count, new_ids).
     Auto-classifies new devices and devices still on default 'other'."""
     now = int(time.time())
     new = updated = 0
     new_ids = []
+    scanned_macs = {h["mac"] for h in hosts if h.get("mac")}
     with db() as c:
         for h in hosts:
             auto_type = classify_vendor(h.get("vendor"))
             existing = None
+            mac_change_from = None
             if h["mac"]:
                 existing = c.execute(
                     "SELECT * FROM devices WHERE mac = ?", (h["mac"],)
@@ -1133,7 +1161,39 @@ def merge_scan(hosts):
                     "SELECT * FROM devices WHERE ip = ? AND manual = 0 AND mac IS NULL",
                     (h["ip"],)
                 ).fetchone()
-            if existing:
+            # #99: детект смены MAC. Новый MAC ещё не в БД, но по этому IP уже есть
+            # ЗНАЧИМАЯ запись с ДРУГИМ MAC, а старый MAC в этом скане нигде не виден →
+            # то же физическое устройство сменило MAC (другой интерфейс/сброс/замена),
+            # а НЕ новое устройство. Усыновляем новый MAC на существующую запись вместо
+            # создания дубля-призрака (иначе именованная запись навсегда offline).
+            # Помечаем mac_change_pending — смена MAC может быть и подменой устройства;
+            # оператор подтверждает через бейдж.
+            if not existing and h["mac"] and h["ip"]:
+                cand = c.execute(
+                    "SELECT * FROM devices WHERE ip = ? AND manual = 0 "
+                    "AND mac IS NOT NULL AND mac <> '' AND mac <> ?",
+                    (h["ip"], h["mac"])
+                ).fetchone()
+                if (cand and cand["mac"] not in scanned_macs
+                        and _significant_device(cand)):
+                    existing = cand
+                    mac_change_from = cand["mac"]
+            if mac_change_from:
+                c.execute("""
+                    UPDATE devices
+                       SET ip = ?, mac = ?, prev_mac = ?, mac_change_pending = 1,
+                           hostname = COALESCE(?, hostname),
+                           vendor = COALESCE(?, vendor),
+                           is_online = 1, last_seen = ?, updated_at = ?
+                     WHERE id = ?
+                """, (h["ip"], h["mac"], mac_change_from, h["hostname"],
+                      h["vendor"], now, now, existing["id"]))
+                c.execute("""INSERT INTO device_events (device_id, event_type, ts, details)
+                             VALUES (?, 'mac_changed', ?, ?)""",
+                          (existing["id"], now, json.dumps(
+                              {"from": mac_change_from, "to": h["mac"], "ip": h["ip"]})))
+                updated += 1
+            elif existing:
                 # Only upgrade device_type if user hasn't overridden ('other' is default).
                 upgrade_type = (
                     auto_type
@@ -1406,6 +1466,25 @@ def delete_device(did):
     audit_log(did, "delete", None)
     _audit("network_device_delete", target=str(did),
            details=(dict(row) if row else {"note": "device not found"}))
+    return jsonify({"ok": True})
+
+
+@bp.route("/api/network/devices/<int:did>/ack-mac-change", methods=["POST"])
+def ack_mac_change(did):
+    """#99: оператор подтверждает смену MAC (это то же устройство) → снимаем флаг
+    бейджа. prev_mac оставляем как след в метаданных."""
+    now = int(time.time())
+    with db() as c:
+        row = c.execute("SELECT mac, prev_mac FROM devices WHERE id = ?",
+                        (did,)).fetchone()
+        if not row:
+            return jsonify({"ok": False, "error": "device not found"}), 404
+        c.execute("UPDATE devices SET mac_change_pending = 0, updated_at = ? WHERE id = ?",
+                  (now, did))
+    audit_log(did, "mac_change_ack",
+              {"from": row["prev_mac"], "to": row["mac"]})
+    _audit("network_mac_change_ack", target=str(did),
+           details={"from": row["prev_mac"], "to": row["mac"]})
     return jsonify({"ok": True})
 
 

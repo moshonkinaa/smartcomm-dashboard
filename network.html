@@ -877,7 +877,7 @@ function render() {
               : d.dhcp_static === 0 || d.dhcp_static === false
                 ? '<span class="pill" style="background:rgba(154,161,173,0.15);color:var(--text-muted);border-color:transparent">dynamic</span>'
                 : '<span style="color:var(--text-dim)">—</span>'}</td>
-        <td class="mono">${d.mac ? escapeHtml(d.mac) + (d.vendor ? ' · ' + escapeHtml(d.vendor) : '') : '<span style="color:var(--text-dim)">—</span>'}</td>
+        <td class="mono">${d.mac ? escapeHtml(d.mac) + (d.vendor ? ' · ' + escapeHtml(d.vendor) : '') : '<span style="color:var(--text-dim)">—</span>'}${(d.mac_change_pending === 1 || d.mac_change_pending === true) ? ' <span class="pill" style="background:rgba(239,159,39,0.16);color:var(--warn);border-color:transparent" title="MAC сменился с ' + escapeHtml(d.prev_mac || '?') + ' — подтвердите в карточке">⚠ MAC сменился</span>' : ''}</td>
         <td><span class="pill ${escapeHtml(t)}">${escapeHtml(TYPE_LABEL[t] || t)}</span></td>
         <td>${escapeHtml(d.room || '—')}</td>
         <td>
@@ -1059,6 +1059,13 @@ function detailHtml(d) {
   return `
     <tr class="detail-row"><td colspan="9">
       <div class="detail-panel">
+        ${(d.mac_change_pending === 1 || d.mac_change_pending === true) ? `
+        <div style="margin-bottom:12px;padding:10px 12px;border-radius:8px;border:1px solid var(--warn);background:rgba(239,159,39,0.10);font-size:13px;line-height:1.5">
+          <b class="text-warn">⚠ MAC-адрес сменился</b> при том же IP:
+          <span class="mono">${escapeHtml(d.prev_mac || '?')}</span> → <span class="mono">${escapeHtml(d.mac || '?')}</span>.
+          Если это то же устройство (сброс/замена интерфейса) — подтвердите. Если устройство подменили — проверьте вручную (изменить MAC / удалить запись).
+          <div style="margin-top:8px"><button class="btn" onclick="event.stopPropagation();ackMacChange(${d.id})">✓ Подтвердить смену MAC</button></div>
+        </div>` : ''}
         <div class="detail-grid">
           <div class="field"><label class="field-label">Имя</label><input type="text" id="ef-name-${d.id}" value="${escapeHtml(d.name || '')}"></div>
           <div class="field"><label class="field-label">Помещение</label><input type="text" id="ef-room-${d.id}" value="${escapeHtml(d.room || '')}"></div>
@@ -1515,6 +1522,21 @@ async function saveDevice(id) {
       await loadDevices();
     } else {
       showToast('ошибка: ' + j.error, true);
+    }
+  } catch (e) {
+    showToast('ошибка: ' + e.message, true);
+  }
+}
+
+async function ackMacChange(id) {
+  try {
+    const r = await fetch('/api/network/devices/' + id + '/ack-mac-change', {method: 'POST'});
+    const j = await r.json();
+    if (j.ok) {
+      showToast('смена MAC подтверждена');
+      await loadDevices();
+    } else {
+      showToast('ошибка: ' + (j.error || 'не удалось'), true);
     }
   } catch (e) {
     showToast('ошибка: ' + e.message, true);
