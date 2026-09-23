@@ -106,7 +106,7 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "3.9.1"
+VERSION = "3.10.0"
 RELEASE_DATE = "2026-07-22"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # SECURITY: допустимый идентификатор сервиса (идёт в filesystem-путь + docker compose).
@@ -1798,6 +1798,11 @@ def get_mikrotik_settings():
         "ip": network_bp.setting_get("mikrotik_ip", default_ip) or default_ip,
         "user": network_bp.setting_get("mikrotik_user", "admin") or "admin",
         "configured": bool(network_bp.setting_get("mikrotik_password", "")),
+        "https": str(network_bp.setting_get("mikrotik_https", "")).strip().lower()
+                 in ("1", "true", "yes", "on"),
+        # rest = HTTP(S) REST; api = бинарный API с постоянной сессией (не спамит
+        # журнал роутера логинами). api-ssl 8729 при https, иначе api 8728.
+        "transport": (network_bp.setting_get("mikrotik_transport", "rest") or "rest"),
         "detected_gateway": network_bp.detect_gateway(),  # для UI placeholder
     })
 
@@ -1814,6 +1819,11 @@ def put_mikrotik_settings():
         network_bp.setting_set("mikrotik_user", d["user"] or "admin")
     if "password" in d:
         network_bp.setting_set("mikrotik_password", d["password"] or "")
+    if "https" in d:
+        network_bp.setting_set("mikrotik_https", "1" if d["https"] else "")
+    if "transport" in d:
+        network_bp.setting_set(
+            "mikrotik_transport", "api" if str(d["transport"]).lower() == "api" else "rest")
     # Сброс кеша чтобы сразу подхватить новые креды
     with mt._CACHE_LOCK:
         mt._CACHE.clear()

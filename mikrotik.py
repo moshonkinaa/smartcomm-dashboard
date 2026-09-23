@@ -1,8 +1,10 @@
-"""MikroTik RouterOS REST API клиент.
-Используется REST (доступен с RouterOS 7+) — простая HTTP-аутентификация,
-никаких бинарных протоколов или SSH-ключей.
+"""MikroTik RouterOS клиент: REST (/rest) или бинарный API (постоянная сессия).
+Транспорт — настройка mikrotik_transport (по умолчанию rest | api). Бинарный API
+логинится ОДИН раз и держит сессию → не спамит журнал роутера логинами (в отличие
+от stateless-REST, который пишет "logged in via rest-api" на каждый запрос).
 """
 import json
+import socket
 import time
 import urllib.request
 import urllib.error
@@ -65,22 +67,211 @@ def _safe_int(v, default=0):
             return default
 
 
+# ============ Backoff при серии отказов опроса роутера ============
+# #101: раньше при недоступности транспорта (напр. сломанный TLS на роутере)
+# контроллер долбил роутер каждые 30с без устали и забивал его небольшой журнал.
+# Теперь после отказа опрос замедляется 60→120→240→300с (потолок), а на первом
+# успехе сбрасывается к штатным 30с. Здоровый роутер не затрагивается:
+# fails=0 → next_try=0 → гейт никогда не срабатывает.
+_MT_BACKOFF = {"fails": 0, "next_try": 0.0}
+_MT_BACKOFF_LOCK = threading.Lock()
+_MT_BACKOFF_MAX = 300
+
+
+def _backoff_gate():
+    with _MT_BACKOFF_LOCK:
+        return time.time() < _MT_BACKOFF["next_try"]
+
+
+def _backoff_ok():
+    with _MT_BACKOFF_LOCK:
+        _MT_BACKOFF["fails"] = 0
+        _MT_BACKOFF["next_try"] = 0.0
+
+
+def _backoff_fail():
+    with _MT_BACKOFF_LOCK:
+        _MT_BACKOFF["fails"] += 1
+        _MT_BACKOFF["next_try"] = time.time() + min(
+            30 * (2 ** _MT_BACKOFF["fails"]), _MT_BACKOFF_MAX)
+
+
+# ============ Бинарный API RouterOS (постоянная сессия) ============
+# #102: транспорт "api" — постоянное соединение к api(8728)/api-ssl(8729).
+# Зачем: REST stateless — роутер пишет "logged in via rest-api" на КАЖДЫЙ запрос →
+# журнал роутера (маленький, всегда впритык по месту) забивается служебными
+# логинами. Бинарный API логинится ОДИН раз и держит сессию → в журнал попадает
+# один логин, а не тысячи. Порт: api-ssl 8729 (TLS) если mikrotik_https, иначе
+# api 8728. Возвращаем строковые значения полей — как REST, совместимо с потребителями.
+_API = {"sock": None, "key": None}
+_API_LOCK = threading.Lock()
+_API_SINGLETON = ("system/resource", "system/identity")  # REST-эквивалент = объект, не массив
+
+
+def _api_len_encode(n):
+    if n < 0x80:
+        return bytes([n])
+    if n < 0x4000:
+        return bytes([(n >> 8) | 0x80, n & 0xFF])
+    if n < 0x200000:
+        return bytes([(n >> 16) | 0xC0, (n >> 8) & 0xFF, n & 0xFF])
+    if n < 0x10000000:
+        return bytes([(n >> 24) | 0xE0, (n >> 16) & 0xFF, (n >> 8) & 0xFF, n & 0xFF])
+    return bytes([0xF0, (n >> 24) & 0xFF, (n >> 16) & 0xFF, (n >> 8) & 0xFF, n & 0xFF])
+
+
+def _api_recvn(sock, n):
+    d = b""
+    while len(d) < n:
+        chunk = sock.recv(n - len(d))
+        if not chunk:
+            raise IOError("api: соединение закрыто")
+        d += chunk
+    return d
+
+
+def _api_read_len(sock):
+    c = _api_recvn(sock, 1)[0]
+    if c < 0x80:
+        return c
+    if c < 0xC0:
+        return ((c & 0x3F) << 8) | _api_recvn(sock, 1)[0]
+    if c < 0xE0:
+        b = _api_recvn(sock, 2)
+        return ((c & 0x1F) << 16) | (b[0] << 8) | b[1]
+    if c < 0xF0:
+        b = _api_recvn(sock, 3)
+        return ((c & 0x0F) << 24) | (b[0] << 16) | (b[1] << 8) | b[2]
+    b = _api_recvn(sock, 4)
+    return (b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]
+
+
+def _api_read_word(sock):
+    n = _api_read_len(sock)
+    return _api_recvn(sock, n).decode("utf-8", "replace") if n else ""
+
+
+def _api_read_sentence(sock):
+    words = []
+    while True:
+        w = _api_read_word(sock)
+        if w == "":
+            return words
+        words.append(w)
+
+
+def _api_read_reply(sock):
+    out = []
+    while True:
+        se = _api_read_sentence(sock)
+        out.append(se)
+        if se and se[0] in ("!done", "!fatal"):
+            return out
+
+
+def _api_send(sock, words):
+    buf = b""
+    for w in words:
+        wb = w.encode("utf-8")
+        buf += _api_len_encode(len(wb)) + wb
+    buf += b"\x00"
+    sock.sendall(buf)
+
+
+def _api_drop():
+    if _API["sock"] is not None:
+        try:
+            _API["sock"].close()
+        except Exception:
+            pass
+    _API["sock"] = None
+    _API["key"] = None
+
+
+def _api_connect(ip, user, pw, use_tls, timeout):
+    sock = socket.create_connection((ip, 8729 if use_tls else 8728), timeout=timeout)
+    sock.settimeout(timeout)
+    if use_tls:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        sock = ctx.wrap_socket(sock, server_hostname=ip)
+    # RouterOS 6.43+: plaintext login (=name/=password)
+    _api_send(sock, ["/login", "=name=" + user, "=password=" + pw])
+    for se in _api_read_reply(sock):
+        if se and se[0] == "!trap":
+            try:
+                sock.close()
+            except Exception:
+                pass
+            raise PermissionError("api login отклонён: " + ";".join(se))
+    return sock
+
+
+def _api_command(ip, user, pw, use_tls, cmd, timeout):
+    """print-команда → list[dict]. Переиспользует сессию; при обрыве — один реконнект."""
+    with _API_LOCK:
+        key = (ip, user, use_tls)
+        last = None
+        for attempt in (1, 2):
+            try:
+                if _API["sock"] is None or _API["key"] != key:
+                    _api_drop()
+                    _API["sock"] = _api_connect(ip, user, pw, use_tls, timeout)
+                    _API["key"] = key
+                _api_send(_API["sock"], [cmd])
+                reply = _api_read_reply(_API["sock"])
+            except Exception as e:
+                last = e
+                _api_drop()
+                continue
+            recs = []
+            for se in reply:
+                if se and se[0] == "!re":
+                    d = {}
+                    for w in se[1:]:
+                        if w.startswith("=") and "=" in w[1:]:
+                            k, v = w[1:].split("=", 1)
+                            d[k] = v
+                    recs.append(d)
+                elif se and se[0] in ("!trap", "!fatal"):
+                    _api_drop()
+                    raise IOError("api: " + ";".join(se))
+            return recs
+        raise last if last else IOError("api: неизвестная ошибка")
+
+
+def _req_api(path, ip, user, pw, use_tls, timeout):
+    p = path.strip("/")
+    try:
+        recs = _api_command(ip, user, pw, use_tls, "/" + p + "/print", timeout)
+        _backoff_ok()
+    except Exception:
+        _backoff_fail()
+        return None
+    if p in _API_SINGLETON:
+        return recs[0] if recs else None
+    return recs
+
+
 def _req(network_bp, path, method="GET", body=None, timeout=4):
-    """GET/POST на /rest/<path>. Возвращает распарсенный JSON или None."""
+    """Опрос роутера. Транспорт REST (/rest, по умолчанию) или бинарный API
+    (mikrotik_transport=api). Возвращает распарсенный JSON (dict/list) или None."""
     ip = _settings_get(network_bp, "mikrotik_ip", _default_mt_ip(network_bp))
     user = _settings_get(network_bp, "mikrotik_user", "admin")
     pw = _settings_get(network_bp, "mikrotik_password", "")
     if not pw:
         return None
-    # #75: опционально HTTPS (www-ssl) — шифрует Basic-auth в проводе (защита пароля
-    # от пассивного сниффинга). Гейт настройкой mikrotik_https: по умолчанию http
-    # (не ломаем контроллеры, где на роутере www-ssl не включён — оператор включает
-    # www-ssl на роутере, потом флипает настройку). Роутер отдаёт self-signed cert
-    # (меняется при пересоздании), поэтому verify off: цель — шифрование, не
-    # cert-auth; на доверенной LAN контроллер↔его роутер этого достаточно. Пиннинг
-    # cert — отдельный техдолг (защита от активного MITM).
+    if _backoff_gate():
+        return None
+    # #75: mikrotik_https — HTTPS/TLS транспорт (шифрует пароль в проводе). Для REST
+    # это www-ssl:443, для api это api-ssl:8729. verify off: self-signed на LAN.
     use_https = str(_settings_get(network_bp, "mikrotik_https", "")).strip().lower() \
         in ("1", "true", "yes", "on")
+    transport = str(_settings_get(network_bp, "mikrotik_transport", "rest")).strip().lower()
+    # Бинарный API — только чтение (print). Записи (если появятся) идут по REST.
+    if transport == "api" and method == "GET" and body is None:
+        return _req_api(path, ip, user, pw, use_https, timeout)
     scheme = "https" if use_https else "http"
     url = f"{scheme}://{ip}/rest/{path.lstrip('/')}"
     ctx = None
@@ -96,14 +287,16 @@ def _req(network_bp, path, method="GET", body=None, timeout=4):
             req.data = json.dumps(body).encode()
         with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
             raw = r.read()
-        # MikroTik (особенно WinBox на русской Windows) пишет comments в CP1251,
-        # не в UTF-8. Сначала пробуем UTF-8 strict, fallback к CP1251.
+        # RouterOS (WinBox на русской Windows) иногда пишет comments в CP1251.
         try:
             text = raw.decode("utf-8")
         except UnicodeDecodeError:
             text = raw.decode("cp1251", "replace")
-        return json.loads(text)
+        result = json.loads(text)
+        _backoff_ok()
+        return result
     except Exception:
+        _backoff_fail()
         return None
 
 
