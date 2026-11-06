@@ -106,8 +106,8 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "3.10.0"
-RELEASE_DATE = "2026-07-22"
+VERSION = "3.10.1"
+RELEASE_DATE = "2026-11-06"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # SECURITY: допустимый идентификатор сервиса (идёт в filesystem-путь + docker compose).
 _SERVICE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
@@ -307,6 +307,12 @@ _METRIC_LOCK = threading.Lock()
 # наоборот → окно расчёта rate схлопывалось, значения были шумные/заниженные.
 _STATUS_PREV  = {"cpu": None, "cpu_cores": {}, "net": {"rx": 0, "tx": 0, "ts": time.time()}}
 _SAMPLER_PREV = {"cpu": None, "cpu_cores": {}, "net": {"rx": 0, "tx": 0, "ts": time.time()}}
+# #103: честный CPU для снапшота (/api/status + heartbeat на портал). Окно между вызовами
+# build_status_payload короткое и почти целиком занято самим сборщиком снапшота → usage
+# взлетал к ~100% при реальных ~2%. Sampler считает чистое 60-сек окно — отдаём его
+# значение. Под _METRIC_LOCK; старше _SAMPLED_CPU_MAX_AGE → считаем вживую (как раньше).
+_SAMPLED_CPU = {"usage": None, "per_core": None, "ts": 0.0}
+_SAMPLED_CPU_MAX_AGE = 180   # сек (sampler шагает раз в 60с)
 
 # ============ Persisted metrics history (survives restarts) ============
 METRICS_DB = "/var/lib/smartcomm-dashboard/metrics.db"
@@ -584,6 +590,34 @@ def cpu_usage_per_core(store=None):
     except Exception:
         pass
     return result
+
+
+def _sample_cpu():
+    """Вызывается ТОЛЬКО sampler-потоком: считает total+per-core по своему store
+    (_SAMPLER_PREV) и публикует для снапшота. Первый вызов store'а даёт 0 (нет prev) —
+    его не публикуем, ждём второй тик. Возвращает total-% для истории."""
+    had_prev = _SAMPLER_PREV["cpu"] is not None
+    usage = cpu_usage_pct(_SAMPLER_PREV)
+    cores = cpu_usage_per_core(_SAMPLER_PREV)
+    if had_prev:
+        with _METRIC_LOCK:
+            _SAMPLED_CPU["usage"] = usage
+            _SAMPLED_CPU["per_core"] = cores
+            _SAMPLED_CPU["ts"] = time.time()
+    return usage
+
+
+def cpu_usage_for_snapshot():
+    """(usage, per_core) для build_status_payload. Свежее значение sampler'а (чистое
+    60-сек окно); нет/устарело (первая минута после старта, sampler завис) → живой
+    расчёт по _STATUS_PREV, как до 3.10.1."""
+    with _METRIC_LOCK:
+        usage = _SAMPLED_CPU["usage"]
+        cores = _SAMPLED_CPU["per_core"]
+        ts = _SAMPLED_CPU["ts"]
+    if usage is not None and (time.time() - ts) <= _SAMPLED_CPU_MAX_AGE:
+        return usage, list(cores or [])
+    return cpu_usage_pct(), cpu_usage_per_core()
 
 
 def disk_info(path="/"):
@@ -912,6 +946,49 @@ def _iridium_base_dir():
         if os.path.isdir(cand):
             return cand
     return _IR_BASE_FALLBACKS[1]  # дефолт legacy путь
+
+
+_IR_UNIT_PATHS = (
+    "/etc/systemd/system/irserver.service",
+    "/etc/systemd/system/irserver.service.DISABLED",   # намеренно отключён (переименован)
+    "/lib/systemd/system/irserver.service",
+    "/usr/lib/systemd/system/irserver.service",
+)
+
+
+def iridium_installed():
+    """iRidium установлен на узле — даже если служба остановлена/переименована в
+    .DISABLED. Не зависит от работающего процесса: каталог, бинарь или unit-файл
+    в любом виде. Порталу нужно, чтобы отличать «остановлен» от «не установлен»."""
+    if os.path.exists(IR_BIN):
+        return True
+    for d in _IR_BASE_FALLBACKS:
+        if os.path.isdir(d):
+            return True
+    for u in _IR_UNIT_PATHS:
+        if os.path.exists(u):
+            return True
+    return False
+
+
+_IR_VER_CACHE = [None, False]   # [значение, вычислено] — за процесс не меняется
+
+
+def iridium_installed_version():
+    """Версия установленного iRidium из dpkg (даже если служба остановлена).
+    Только для .deb-инсталляций; иначе None. Кэш на процесс."""
+    if _IR_VER_CACHE[1]:
+        return _IR_VER_CACHE[0]
+    v = None
+    if iridium_installed():
+        for pkg in ("iridiumserver", "iridium-server", "iridium"):
+            out = sh(f"dpkg-query -W -f='${{Version}}' {pkg} 2>/dev/null").strip()
+            if out and out[0].isdigit():
+                v = out
+                break
+    _IR_VER_CACHE[0] = v
+    _IR_VER_CACHE[1] = True
+    return v
 
 
 _IR_BASE = None
@@ -1635,7 +1712,7 @@ def sampler():
     while True:
         try:
             t = cpu_temp_c()
-            c = cpu_usage_pct(_SAMPLER_PREV)          # #81.4: свой store, не делим с request-path
+            c = _sample_cpu()                         # #81.4: свой store, не делим с request-path; #103: + публикация для снапшота
             m = mem_info()
             d = disk_info("/")
             rx_rate, tx_rate, _, _ = net_rate(store=_SAMPLER_PREV)
@@ -1869,6 +1946,7 @@ def build_status_payload():
     rx_rate, tx_rate, rx_total, tx_total = net_rate()
     throt_raw, throt = throttled()
     irsrv = f_irsrv.result()
+    cpu_usage, cpu_per_core = cpu_usage_for_snapshot()   # #103: значение sampler'а, не дельта «с прошлого вызова»
     return {
         "ts": int(time.time()),
         "version": VERSION,
@@ -1883,10 +1961,10 @@ def build_status_payload():
             "kernel": os.uname().release,
         },
         "cpu": {
-            "usage": cpu_usage_pct(),
+            "usage": cpu_usage,
             "freq_mhz": cpu_freq_mhz(),
             "temp_c": cpu_temp_c(),
-            "per_core": cpu_usage_per_core(),
+            "per_core": cpu_per_core,
         },
         "mem": mem_info(),
         "disk_root": disk_info("/"),
@@ -1908,6 +1986,8 @@ def build_status_payload():
         "iridium_log_meta": f_ilog_meta.result(),
         "iridium_info": iridium_info(irsrv["pid"]),
         "iridium_disabled": network_bp.setting_get("iridium_disabled", "0") == "1",
+        "iridium_installed": iridium_installed(),
+        "iridium_installed_ver": iridium_installed_version(),
         "health": f_health.result(),
         "argon_installed": f_argon_in.result(),
     }
