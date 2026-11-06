@@ -106,7 +106,7 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "3.10.1"
+VERSION = "3.10.2"
 RELEASE_DATE = "2026-11-06"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # SECURITY: допустимый идентификатор сервиса (идёт в filesystem-путь + docker compose).
@@ -1148,13 +1148,40 @@ def iridium_proc_info(pid):
 _IR_HTTP_STATE = {"data": {"alive": None, "error": "ещё не проверен"},
                   "ts": 0.0, "lock": threading.Lock()}
 
+# #105: одиночный таймаут пробы — это «порт на секунду подвис», а не «сервер лежит».
+# Раньше одна неудачная проба (таймаут 2 с, раз в 10 с) сразу красила плитку в
+# «порт не отвечает» → на Таурени (≈11% минут) оператор жал «Рестарт» впустую.
+IR_HTTP_TIMEOUT = 5          # сек на одну пробу
+IR_HTTP_FAIL_STREAK = 3      # столько неудач ПОДРЯД, чтобы объявить alive=False
+
+
+def _iridium_http_debounce(prev, probe, streak):
+    """Чистая функция: сглаживает одиночные отказы пробы.
+    prev — последнее опубликованное состояние, probe — результат свежей пробы,
+    streak — число неудач подряд ДО этой пробы. Возвращает (state, streak).
+    Успех сбрасывает серию. Неудача, пока серия короче IR_HTTP_FAIL_STREAK и
+    последнее опубликованное состояние было «жив», оставляет «жив» (+fail_streak,
+    last_error для подсказки в UI). Если жив-состояния не было (старт, длинная
+    серия) — публикуем отказ как есть."""
+    if probe.get("alive"):
+        return probe, 0
+    streak += 1
+    if streak < IR_HTTP_FAIL_STREAK and prev and prev.get("alive") is True:
+        kept = dict(prev)
+        kept["fail_streak"] = streak
+        kept["last_error"] = probe.get("error")
+        return kept, streak
+    failed = dict(probe)
+    failed["fail_streak"] = streak
+    return failed, streak
+
 def _iridium_http_check_now():
-    """Один TCP+HTTP probe к :8888 с timeout 2 сек."""
+    """Один TCP+HTTP probe к :8888 с timeout IR_HTTP_TIMEOUT сек."""
     try:
         import urllib.request, socket
         t0 = time.time()
         req = urllib.request.Request("http://127.0.0.1:8888/")
-        with urllib.request.urlopen(req, timeout=2) as r:
+        with urllib.request.urlopen(req, timeout=IR_HTTP_TIMEOUT) as r:
             ms = int((time.time() - t0) * 1000)
             return {"alive": True, "code": r.getcode(), "ms": ms}
     except urllib.error.HTTPError as e:
@@ -1169,11 +1196,14 @@ def iridium_http_check():
         return dict(_IR_HTTP_STATE["data"])
 
 def _iridium_http_sampler():
-    """Фоновый поток: каждые 10 сек дёргает iRidium :8888 и обновляет _IR_HTTP_STATE."""
+    """Фоновый поток: каждые 10 сек дёргает iRidium :8888 и обновляет _IR_HTTP_STATE
+    (с дебаунсом: alive=False только после IR_HTTP_FAIL_STREAK неудач подряд)."""
+    streak = 0
     while True:
         try:
-            d = _iridium_http_check_now()
+            probe = _iridium_http_check_now()
             with _IR_HTTP_STATE["lock"]:
+                d, streak = _iridium_http_debounce(_IR_HTTP_STATE["data"], probe, streak)
                 _IR_HTTP_STATE["data"] = d
                 _IR_HTTP_STATE["ts"] = time.time()
         except Exception:
@@ -1197,7 +1227,20 @@ def iridium_info(pid):
 # Reverse-engineered: POST /html/login.html with form data sets 'ir-session-id' cookie,
 # then GET /json/{module}/.../get returns JSON (text/plain content-type).
 
-_IR_SESSION = {"cookie": None, "obtained_at": 0, "lock": threading.Lock()}
+# #106: после ОТКАЗА в логине (неверный/устаревший пароль) не долбим iRidium
+# логином каждый тик. Раньше «логин ×6 параллельно + retry ×6» = ~12 неудачных
+# логинов за 30 с; на iRidium 1.3.89 (Таурени) это подвешивало веб-порт на десятки
+# секунд, и собственная проба дашборда краснела.
+IR_LOGIN_BACKOFF = (30, 60, 120, 240, 300)   # сек между попытками после отказа
+IR_LOGIN_RETRY_UNREACHABLE = 30              # iRidium недоступен/тормозит — без наращивания
+_IR_SESSION = {"cookie": None, "obtained_at": 0, "lock": threading.Lock(),
+               "fail_count": 0, "retry_at": 0.0, "fail_fp": None, "reason": None}
+
+
+def _ir_pw_fingerprint(pw):
+    """Отпечаток пароля для сравнения «пароль сменили?» (сам пароль в памяти не держим)."""
+    import hashlib
+    return hashlib.sha256((pw or "").encode("utf-8", "replace")).hexdigest()[:16]
 IR_LOGIN_URL = "http://127.0.0.1:8888/html/login.html"
 IR_BASE      = "http://127.0.0.1:8888"
 
@@ -1208,8 +1251,10 @@ def _ir_login():
     to /html/main is followed."""
     pw = network_bp.setting_get("iridium_password", "")
     if not pw:
+        _IR_SESSION["reason"] = "no_password"
         return None
     user = network_bp.setting_get("iridium_username", "admin") or "admin"
+    reason = None
     try:
         import urllib.request, urllib.parse, http.cookiejar
         data = urllib.parse.urlencode({
@@ -1223,13 +1268,19 @@ def _ir_login():
         req.add_header("Content-Type", "application/x-www-form-urlencoded")
         try:
             opener.open(req, timeout=6)
-        except Exception:
+        except urllib.error.HTTPError:
             pass    # the 301 → /html/main may 404 with this client; cookie is already in jar
+        except Exception:
+            reason = "unreachable"   # таймаут/refused: iRidium недоступен или тормозит
         for c in jar:
             if c.name == "ir-session-id":
+                _IR_SESSION["reason"] = None
                 return c.value
     except Exception:
+        _IR_SESSION["reason"] = "unreachable"
         return None
+    # ответил, но сессию не выдал — логин/пароль не приняты
+    _IR_SESSION["reason"] = reason or "rejected"
     return None
 
 
@@ -1243,10 +1294,34 @@ def _ir_get_cookie():
         now = time.time()
         if _IR_SESSION["cookie"] and (now - _IR_SESSION["obtained_at"]) < 1800:
             return _IR_SESSION["cookie"]
+        fp = _ir_pw_fingerprint(network_bp.setting_get("iridium_password", ""))
+        if _IR_SESSION["retry_at"] > now and _IR_SESSION["fail_fp"] == fp:
+            return None     # бэкофф после отказа; смена пароля (другой fp) снимает его сразу
         new = _ir_login()
         _IR_SESSION["cookie"] = new
         _IR_SESSION["obtained_at"] = now
+        if new:
+            _IR_SESSION["fail_count"] = 0
+            _IR_SESSION["retry_at"] = 0.0
+            _IR_SESSION["fail_fp"] = None
+        else:
+            if _IR_SESSION["reason"] == "rejected":
+                _IR_SESSION["fail_count"] += 1
+                wait = IR_LOGIN_BACKOFF[min(_IR_SESSION["fail_count"], len(IR_LOGIN_BACKOFF)) - 1]
+            else:
+                wait = IR_LOGIN_RETRY_UNREACHABLE
+            _IR_SESSION["retry_at"] = now + wait
+            _IR_SESSION["fail_fp"] = fp
         return new
+
+
+def _ir_login_wait_sec():
+    """Сколько секунд ещё действует бэкофф логина (0 — можно пробовать)."""
+    with _IR_SESSION["lock"]:
+        left = _IR_SESSION["retry_at"] - time.time()
+    if left <= 0:
+        return 0
+    return int(left) if left == int(left) else int(left) + 1     # округление вверх
 
 
 def _ir_get(path):
@@ -1346,8 +1421,10 @@ def _iridium_api_snapshot_impl():
         futures = [_EXECUTOR.submit(_ir_get, ep) for ep in eps]
         return [f.result() or {} for f in futures]
     results = _try_all()
-    # Retry один раз через 200 мс если ВСЕ упали — защита от GC pause iRidium
-    if all(not r for r in results):
+    # Retry один раз через 200 мс если ВСЕ упали — защита от GC pause iRidium.
+    # НЕ ретраим, пока действует бэкофф логина (#106): иначе это снова серия
+    # неудачных логинов подряд.
+    if all(not r for r in results) and _ir_login_wait_sec() == 0:
         time.sleep(0.2)
         # Сбрасываем cookie чтобы новый _ir_get сделал свежий login
         with _IR_SESSION["lock"]:
@@ -1355,6 +1432,11 @@ def _iridium_api_snapshot_impl():
         results = _try_all()
     main, info, licence, project, devices, tags = results
     if not main and not licence:
+        wait = _ir_login_wait_sec()
+        if wait and _IR_SESSION["reason"] == "rejected":
+            return {"configured": True, "ok": False, "auth_failed": True, "retry_in_sec": wait,
+                    "error": "iRidium не принял логин/пароль API — проверьте их в настройках "
+                             "(следующая попытка через %d с)" % wait}
         return {"configured": True, "ok": False, "error": "iRidium API не отвечает (GC pause? скрипт-баг?)"}
     return {
         "configured": True,
@@ -1853,8 +1935,12 @@ def put_iridium_settings():
         val = "1" if (d["disabled"] is True or str(d["disabled"]) in ("1", "true")) else "0"
         network_bp.setting_set("iridium_disabled", val)
     # Drop cached cookie so next API call re-logs in with new creds
+    # (и снять бэкофф логина — новый пароль пробуем сразу)
     with _IR_SESSION["lock"]:
         _IR_SESSION["cookie"] = None
+        _IR_SESSION["fail_count"] = 0
+        _IR_SESSION["retry_at"] = 0.0
+        _IR_SESSION["fail_fp"] = None
     # Test it
     # Bypass cache при смене пароля — вызываем impl напрямую
     with _IR_API_CACHE["lock"]:

@@ -372,7 +372,7 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
           Портал
         </button>
-        <button class="tile-btn primary" onclick="confirmAction('restart-iridium', 'Перезапустить iRidium service? Портал :8888 будет недоступен ~3 минуты пока проект грузится.')" title="Перезапустить сервис iRidium (~3 мин простоя)">
+        <button class="tile-btn primary" onclick="confirmIridiumRestart()" title="Перезапустить сервис iRidium (~3 мин простоя)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
           Рестарт
         </button>
@@ -1348,6 +1348,8 @@ async function loadStatus() {
     } else {
       statusText = 'активен'; statusCss = 'ok';
     }
+    // #105: подсказка для confirmIridiumRestart() — красный статус часто ложный
+    window._irPortDown = (irActive && !portAlive && !loadingProject);
     statusColor = getComputedStyle(document.documentElement).getPropertyValue('--' + statusCss);
     document.getElementById('irserver-status').textContent = statusText;
     document.getElementById('irserver-status').style.color = statusColor;
@@ -1356,6 +1358,9 @@ async function loadStatus() {
     let subText = 'PID ' + d.irserver.pid + ' · с ' + compactTs(d.irserver.started);
     if (portAlive && irHttp.ms != null) {
       subText += ' · :8888 ' + irHttp.ms + ' мс';
+    }
+    if (portAlive && irHttp.fail_streak > 0) {
+      subText += ' · порт подвисает (' + irHttp.fail_streak + ' из 3)';
     }
     document.getElementById('irserver-sub').textContent = subText;
 
@@ -1557,6 +1562,19 @@ function showToast(msg, isErr) {
   t.textContent = msg;
   t.className = 'toast show' + (isErr ? ' err' : '');
   setTimeout(() => t.className = 'toast', 4000);
+}
+
+function confirmIridiumRestart() {
+  // #105: «порт не отвечает» нередко означает кратковременное подвисание веб-портала,
+  // а не отказ сервера; рестарт останавливает драйверы и панели ~3 мин и может не помочь.
+  let msg = 'Перезапустить iRidium service? Портал :8888 будет недоступен ~3 минуты пока проект грузится.';
+  if (window._irPortDown) {
+    msg = 'Сервис iRidium запущен, но порт :8888 не ответил на последние проверки.\n\n' +
+          'Часто это кратковременное подвисание веб-портала, а НЕ сбой сервера: драйверы и панели могут работать.\n' +
+          'Рестарт остановит их примерно на 3 минуты и может ничего не исправить.\n\n' +
+          'Всё равно перезапустить?';
+  }
+  confirmAction('restart-iridium', msg);
 }
 
 async function confirmAction(action, prompt) {
