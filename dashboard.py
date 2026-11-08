@@ -106,8 +106,8 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "3.10.2"
-RELEASE_DATE = "2026-11-06"
+VERSION = "3.10.3"
+RELEASE_DATE = "2026-11-08"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # SECURITY: допустимый идентификатор сервиса (идёт в filesystem-путь + docker compose).
 _SERVICE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")

@@ -1668,6 +1668,79 @@ def _service_dir(service_id):
     return DATA_BASE / service_id
 
 
+# --- Часовой пояс контейнеров каталога ---------------------------------------
+# {TZ} в compose.yml манифеста = часовой пояс ХОСТА: контроллеры стоят в разных
+# странах (Таурени — Рига, Alemania29 — Барселона, остальные — Москва), и сервисы
+# из каталога должны жить по местному времени своей площадки.
+TZ_FALLBACK = "Europe/Moscow"   # прежнее поведение, если пояс хоста определить нельзя
+# SECURITY: значение подставляется в compose.yml как ТЕКСТ — только безопасные
+# символы имён tzdata (Europe/Riga, America/Argentina/Buenos_Aires, Etc/GMT+3, W-SU).
+_TZ_NAME_RE = re.compile(r"\A[A-Za-z][A-Za-z0-9_+\-]*(?:/[A-Za-z0-9_+\-]+){0,2}\Z")
+
+
+def _tz_candidates(tz_file, localtime):
+    """Имена пояса из /etc/timezone и из симлинка /etc/localtime (по порядку доверия)."""
+    out = []
+    try:
+        with open(tz_file, "r", encoding="utf-8", errors="replace") as f:
+            out.append(f.readline().strip())
+    except OSError:
+        pass
+    try:
+        target = os.readlink(localtime)
+        i = target.find("zoneinfo/")
+        if i >= 0:
+            out.append(target[i + len("zoneinfo/"):])
+    except OSError:
+        pass
+    return out
+
+
+def _read_head(path, limit=65536):
+    try:
+        with open(path, "rb") as f:
+            return f.read(limit)
+    except OSError:
+        return None
+
+
+def detect_host_timezone(tz_file="/etc/timezone", localtime="/etc/localtime",
+                         zoneinfo="/usr/share/zoneinfo"):
+    """IANA-имя пояса хоста или None. Имя принимается, только если оно проходит
+    маску и для него есть файл в zoneinfo. Если /etc/timezone и /etc/localtime
+    расходятся (пояс меняли руками) — верим тому, чьи данные совпадают с реально
+    действующим /etc/localtime."""
+    actual = _read_head(localtime)
+    first_valid = None
+    for name in _tz_candidates(tz_file, localtime):
+        if not name or not _TZ_NAME_RE.match(name):
+            continue
+        data = _read_head(os.path.join(zoneinfo, name))
+        if data is None:
+            continue
+        if actual is None or data == actual:
+            return name
+        if first_valid is None:
+            first_valid = name
+    return first_valid
+
+
+def host_timezone():
+    """Пояс хоста для {TZ}; не определился — Europe/Moscow, как было до 3.10.3."""
+    try:
+        return detect_host_timezone() or TZ_FALLBACK
+    except Exception:
+        return TZ_FALLBACK
+
+
+def _compose_tz(defaults):
+    """Значение {TZ}: явный defaults.TZ манифеста → пояс хоста → Europe/Moscow."""
+    tz = defaults.get("TZ") if isinstance(defaults, dict) else None
+    if isinstance(tz, str) and _TZ_NAME_RE.match(tz):
+        return tz
+    return host_timezone()
+
+
 def _render_compose(manifest):
     """Возвращает текст compose.yml с заменёнными placeholder'ами."""
     compose_raw = manifest.get("compose", "")
@@ -1678,7 +1751,7 @@ def _render_compose(manifest):
     substitutions = {
         "{DATA}": str(_service_dir(sid)),
         "{MEDIA}": defaults.get("MEDIA", str(DATA_BASE / "_media")),
-        "{TZ}": defaults.get("TZ", "Europe/Moscow"),
+        "{TZ}": _compose_tz(defaults),
         "{CONTROLLER}": defaults.get("CONTROLLER", os.uname().nodename),
     }
     text = compose_raw
