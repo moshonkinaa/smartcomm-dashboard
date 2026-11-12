@@ -106,7 +106,7 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "3.12.0"
+VERSION = "3.12.1"
 RELEASE_DATE = "2026-11-12"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # SECURITY: допустимый идентификатор сервиса (идёт в filesystem-путь + docker compose).
@@ -305,8 +305,11 @@ _METRIC_LOCK = threading.Lock()
 # (build_status_payload и live-графики) и фоновый sampler держат СВОЙ store. Раньше
 # делили одни глобалы → sampler каждые 60с обнулял dt для следующего /api/status и
 # наоборот → окно расчёта rate схлопывалось, значения были шумные/заниженные.
-_STATUS_PREV  = {"cpu": None, "cpu_cores": {}, "net": {"rx": 0, "tx": 0, "ts": time.time()}}
-_SAMPLER_PREV = {"cpu": None, "cpu_cores": {}, "net": {"rx": 0, "tx": 0, "ts": time.time()}}
+# net.rx is None = ещё не было ни одного замера (первый вызов net_rate() только запоминает счётчики).
+# Раньше стартовало с rx=tx=0 → первая «скорость» после КАЖДОГО перезапуска службы = все байты с загрузки / dt
+# (≈10^7 КБ/с в metrics.db) и ломала масштаб графика сети.
+_STATUS_PREV  = {"cpu": None, "cpu_cores": {}, "net": {"rx": None, "tx": None, "ts": time.time()}}
+_SAMPLER_PREV = {"cpu": None, "cpu_cores": {}, "net": {"rx": None, "tx": None, "ts": time.time()}}
 # #103: честный CPU для снапшота (/api/status + heartbeat на портал). Окно между вызовами
 # build_status_payload короткое и почти целиком занято самим сборщиком снапшота → usage
 # взлетал к ~100% при реальных ~2%. Sampler считает чистое 60-сек окно — отдаём его
@@ -347,8 +350,24 @@ def _metrics_cleanup(days=30):
     except Exception:
         pass
 
+def _metrics_fix_net_spikes():
+    """Один раз при старте: до 3.12.1 первый замер сети после каждого рестарта писался как «все байты с загрузки / dt»
+    (≈10^7 КБ/с) и ломал масштаб графика. Реальный канал контроллера ≤ ~250 000 КБ/с (1 Гбит/с в обе стороны),
+    поэтому всё выше 2 000 000 КБ/с — заведомый артефакт: обнуляем."""
+    try:
+        con = _metrics_db()
+        n = con.execute("UPDATE samples SET net = 0 WHERE net > 2000000").rowcount
+        con.commit()
+        con.close()
+        if n:
+            print(f"[metrics] cleared {n} impossible net samples (pre-3.12.1 restart artifacts)")
+    except Exception as e:
+        print(f"[metrics] net spike cleanup skipped: {e}")
+
+
 def _metrics_hydrate():
     """Pull recent samples from DB into the in-memory deques on startup."""
+    _metrics_fix_net_spikes()
     try:
         con = _metrics_db()
         now = int(time.time())
@@ -714,11 +733,16 @@ def net_rate(iface=None, store=None):
                     now = time.time()
                     with _METRIC_LOCK:
                         pn = st["net"]
-                        dt = max(0.5, now - pn["ts"])
-                        drx = max(0, rx - pn["rx"])
-                        dtx = max(0, tx - pn["tx"])
-                        rx_rate = int(drx / dt)
-                        tx_rate = int(dtx / dt)
+                        if pn["rx"] is None or pn["tx"] is None:      # первый замер после старта: только запоминаем счётчики
+                            rx_rate = tx_rate = 0
+                        else:
+                            dt = max(0.5, now - pn["ts"])
+                            drx = max(0, rx - pn["rx"])
+                            dtx = max(0, tx - pn["tx"])
+                            rx_rate = int(drx / dt)
+                            tx_rate = int(dtx / dt)
+                            if rx_rate > 12500000000 or tx_rate > 12500000000:   # >100 Гбит/с — сброс счётчиков/сбой, не скорость
+                                rx_rate = tx_rate = 0
                         st["net"] = {"rx": rx, "tx": tx, "ts": now}
                     return rx_rate, tx_rate, rx, tx
     except Exception:
