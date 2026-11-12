@@ -106,7 +106,7 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "3.11.0"
+VERSION = "3.11.1"
 RELEASE_DATE = "2026-11-12"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # SECURITY: допустимый идентификатор сервиса (идёт в filesystem-путь + docker compose).
@@ -1691,6 +1691,112 @@ def smart_disk_health():
     return info
 
 
+# <sdmon-begin>
+# ===== Здоровье промышленной SD-карты через sdmon (опционально) =====
+# У промышленных SD-карт (Kingston SDCIT/SDCIT2, SanDisk Industrial, Apacer и др.) есть проприетарный счётчик
+# здоровья по служебной команде CMD56. Читает его утилита sdmon (github.com/Ognian/sdmon, GPL-2). Обычные карты
+# на CMD56 не отвечают. Утилита ОПЦИОНАЛЬНА: нет бинаря /usr/local/bin/sdmon — плитка выглядит как раньше.
+# Карте шлём команды редко (раз в 6 ч) и только известными для изготовителя способом (не «auto» — он пробует
+# команды чужих вендоров); результат кэшируется, запрос плитки карту не трогает.
+SDMON_BIN_PATHS = ("/usr/local/bin/sdmon", "/opt/smartcomm-dashboard/sdmon")   # только каталоги root: запуск идёт через sudo
+SDMON_METHOD_BY_MANFID = {"0x00009f": "2step", "0x000041": "2step",            # Kingston SD (в т.ч. Industrial SDCIT/SDCIT2)
+                          "0x000003": "sandisk"}                               # SanDisk
+SDMON_REFRESH_S = 6 * 3600
+SDMON_RETRY_S = 24 * 3600
+_SDMON = {"state": None, "data": None, "ts": 0}
+_SDMON_LOCK = threading.Lock()
+
+
+def sdmon_parse(text):
+    """Разобрать вывод sdmon (может начинаться со строки «Trying …»). Вернуть компактный словарь или None."""
+    i = (text or "").find("{")
+    if i < 0:
+        return None
+    try:
+        j = json.loads(text[i:])
+    except ValueError:
+        return None
+    if not isinstance(j, dict) or not j.get("success"):
+        return None
+
+    def num(k):
+        v = j.get(k)
+        return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+    life = num("enduranceRemainLifePercent")          # Kingston Industrial / Apacer
+    vendor = "Kingston/Apacer"
+    if life is None and num("healthStatusPercentUsed") is not None:   # SanDisk: «использовано, %» (1 = 0…0,99 %)
+        life = max(0, 100 - num("healthStatusPercentUsed")); vendor = "SanDisk"
+    if life is None:
+        return None
+    d = {"vendor": vendor, "life_pct": round(float(life), 2)}
+    for key, name in (("avgEraseCount", "avg_erase"), ("maxEraseCount", "max_erase"), ("minEraseCount", "min_erase"),
+                      ("totalEraseCount", "total_erase"), ("laterBadBlockCount", "bad_later"),
+                      ("initialBadBlockCount", "bad_init"), ("goodBlockRatePercent", "good_pct"),
+                      ("powerUpCount", "power_ups"), ("powerOnTimes", "power_ups"),
+                      ("abnormalPowerOffCount", "abnormal_off"), ("totalRefreshCount", "refresh")):
+        v = num(key)
+        if v is not None:
+            d[name] = v
+    level = "ok"
+    if d["life_pct"] < 10:
+        level = "err"
+    elif d["life_pct"] < 30 or d.get("bad_later", 0) >= 5:
+        level = "warn"
+    d["level"] = level
+    return d
+
+
+def _sdmon_probe():
+    """Один опрос карты → (state, data). state: ok | none (нечего опрашивать) | unsupported | error."""
+    binp = next((p for p in SDMON_BIN_PATHS if os.path.isfile(p) and os.access(p, os.X_OK)), None)
+    dev = root_block_device()
+    if not binp or not dev or not re.fullmatch(r"/dev/mmcblk\d+", dev):
+        return "none", None
+    base = f"/sys/block/{dev[5:]}/device"
+    if (_read_sysfs(f"{base}/type") or "").upper() != "SD":
+        return "none", None
+    method = SDMON_METHOD_BY_MANFID.get((_read_sysfs(f"{base}/manfid") or "").lower())
+    if not method:
+        return "none", None                           # изготовитель без известного способа — карту не трогаем
+    try:
+        r = subprocess.run(["sudo", "-n", binp, "-m", method, dev], capture_output=True, text=True, timeout=20)
+    except Exception:
+        return "error", None
+    d = sdmon_parse(r.stdout)
+    return ("ok", d) if d else ("unsupported", None)
+
+
+def _sdmon_refresher():
+    time.sleep(90)                                     # дать системе и службам успокоиться после старта
+    while True:
+        wait = 3600
+        try:
+            state, data = _sdmon_probe()
+            with _SDMON_LOCK:
+                _SDMON["state"] = state
+                if state == "ok":
+                    _SDMON["data"] = data; _SDMON["ts"] = int(time.time())     # при сбое остаются последние хорошие данные
+                    wait = SDMON_REFRESH_S
+                elif state in ("unsupported", "error"):
+                    wait = SDMON_RETRY_S
+        except Exception:
+            pass
+        time.sleep(wait)
+
+
+def sdmon_snapshot():
+    """Последние данные sdmon для плитки или None (нет утилиты / карта не отвечает / ещё не опрашивали)."""
+    with _SDMON_LOCK:
+        d, ts = _SDMON["data"], _SDMON["ts"]
+    if not d:
+        return None
+    return dict(d, ts=ts, age_s=max(0, int(time.time()) - ts))
+
+
+threading.Thread(target=_sdmon_refresher, daemon=True).start()
+# <sdmon-end>
+
+
 def sdcard_health():
     """eMMC has real SMART via extcsd; plain SD cards do not (hardware
     limitation). We detect type and return what's actually readable."""
@@ -1721,6 +1827,10 @@ def sdcard_health():
         "0x0000ad": "Longsys", "0x0000fe": "Micron",
     }
     info["manufacturer"] = manuf_map.get(info["manfid"], info["manfid"] or "?")
+    if card_type.upper() == "SD":
+        sm = sdmon_snapshot()                          # здоровье промышленной карты (если установлен sdmon и карта отвечает)
+        if sm:
+            info["sdmon"] = sm
 
     # Try eMMC SMART (only works on eMMC, not SD)
     if card_type.upper() == "MMC":

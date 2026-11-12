@@ -1148,6 +1148,19 @@ function renderHealth(h, throttle) {
     if (sd.pre_eol_raw === 3 || sd.life_a_pct_max >= 100) cls = 'err';
     items.push(healthRow(cls, 'eMMC ' + (sd.name || ''),
       (sd.pre_eol || '?') + ' · ≤' + sd.life_a_pct_max + '% износа'));
+  } else if (sd.sdmon) {
+    // Промышленная SD-карта: здоровье по служебной команде CMD56 (утилита sdmon, опрос раз в 6 ч)
+    const m = sd.sdmon, fmt = x => String(x).replace('.', ',');
+    const parts = [];
+    if (sd.manufacturer) parts.push(sd.manufacturer);
+    if (sd.name) parts.push(sd.name);
+    if (sd.size_h) parts.push(sd.size_h);
+    parts.push('ресурс ' + fmt(m.life_pct) + ' %');
+    if (m.avg_erase != null) parts.push('стираний ср. ' + m.avg_erase + (m.max_erase != null ? ' (макс ' + m.max_erase + ')' : ''));
+    if (m.bad_later != null) parts.push('новых плохих блоков ' + m.bad_later);
+    if (m.abnormal_off != null) parts.push('аварийных отключений питания ' + m.abnormal_off);
+    if (m.age_s > 12 * 3600) parts.push('данные от ' + (m.age_s >= 2 * 86400 ? Math.round(m.age_s / 86400) + ' дн. назад' : Math.round(m.age_s / 3600) + ' ч назад'));
+    items.push(healthRow(m.level === 'err' ? 'err' : (m.level === 'warn' ? 'warn' : 'ok'), 'SD card', parts.join(' · ')));
   } else {
     // Plain SD card — no SMART. Show static info only.
     const parts = [];

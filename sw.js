@@ -1,6 +1,6 @@
 // Minimal service worker — installs PWA, never caches /api/ responses,
 // caches static assets opportunistically with stale-while-revalidate.
-const CACHE = 'sc-v6';
+const CACHE = 'sc-v7';
 const STATIC = ['/chart.min.js', '/manifest.json'];
 
 self.addEventListener('install', e => {
