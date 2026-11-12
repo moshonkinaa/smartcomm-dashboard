@@ -106,7 +106,7 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "3.11.1"
+VERSION = "3.12.0"
 RELEASE_DATE = "2026-11-12"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # SECURITY: допустимый идентификатор сервиса (идёт в filesystem-путь + docker compose).
@@ -1797,6 +1797,163 @@ threading.Thread(target=_sdmon_refresher, daemon=True).start()
 # <sdmon-end>
 
 
+# <wear-begin>
+# ===== Оценка износа накопителя по объёму записи (для карт без собственного счётчика здоровья) =====
+# Ядро считает, сколько байт записано на ФС (ext4: /sys/fs/ext4/<раздел>/lifetime_write_kbytes, хранится в суперблоке).
+# Это НЕ показание самой карты, а оценка: «сколько раз записали объём карты» и «как быстро пишем сейчас».
+# Для обычной (бытовой) карты ориентир ресурса — WEAR_BUDGET_REWRITES полных перезаписей (с учётом усиления записи
+# внутри карты; реальный ресурс сильно зависит от модели). Счётчик идёт с создания ФС: у карты, которую до этого
+# уже использовали, настоящий износ больше. У карт с реальным счётчиком (sdmon) ориентир не показываем.
+WEAR_STATE_FILE = "/var/lib/smartcomm-dashboard/sdwear.json"
+WEAR_SAMPLE_S = 3600
+WEAR_KEEP = 24 * 14 + 8                                  # ~14 суток почасовых отсчётов
+WEAR_BUDGET_REWRITES = 300
+WEAR_MIN_AGE_S = 6 * 3600                                # скорость считаем по отсчётам не моложе 6 часов
+_WEAR = {"samples": [], "since": None, "since_ts": 0}
+_WEAR_LOCK = threading.Lock()
+
+
+def _root_fs_part():
+    """Имя раздела корневой ФС (mmcblk0p2, sda2 …) или None."""
+    src = sh("findmnt -n -o SOURCE /").strip()
+    name = src.split("/")[-1] if src.startswith("/dev/") else ""
+    if name and os.path.exists(f"/sys/fs/ext4/{name}/lifetime_write_kbytes"):
+        return name
+    return None
+
+
+def wear_counters(part=None):
+    """(записано всего КБ, записано с загрузки КБ) по счётчикам ext4 или None."""
+    part = part or _root_fs_part()
+    if not part:
+        return None
+    try:
+        life = int(_read_sysfs(f"/sys/fs/ext4/{part}/lifetime_write_kbytes"))
+        sess = int(_read_sysfs(f"/sys/fs/ext4/{part}/session_write_kbytes") or 0)
+        return life, sess
+    except (TypeError, ValueError):
+        return None
+
+
+def wear_estimate(samples, now, cur_kb, sess_kb, uptime_s, capacity_gb, has_health, since=None):
+    """Чистая функция: из отсчётов [[ts, lifetime_kb], …] и текущих счётчиков собрать оценку износа по записи."""
+    if not capacity_gb or capacity_gb <= 0 or cur_kb is None:
+        return None
+    written_gb = cur_kb / 1048576.0
+    rewrites = written_gb / capacity_gb
+    rate, src = None, None
+    refs = [s for s in samples if now - s[0] >= WEAR_MIN_AGE_S and cur_kb >= s[1]]
+    if refs:
+        ref = refs[0]                                    # самый старый из хранимых (до ~14 суток) — устойчивее к всплескам
+        days = (now - ref[0]) / 86400.0
+        rate = (cur_kb - ref[1]) / 1048576.0 / days
+        src = ("за %d ч" % max(1, round(days * 24))) if days < 1 else ("за сутки" if days < 1.5 else "за %d дн." % round(days))
+    elif uptime_s and uptime_s >= 6 * 3600 and sess_kb is not None:
+        rate = sess_kb / 1048576.0 / (uptime_s / 86400.0)
+        src = "с загрузки"
+    w = {"written_gb": round(written_gb, 1), "capacity_gb": round(capacity_gb, 1), "rewrites": round(rewrites, 1),
+         "rate_gb_day": round(rate, 2) if rate is not None else None, "rate_src": src, "since": since,
+         "years_left": None, "used_pct": None, "budget": None, "level": "ok"}
+    if not has_health:                                   # у карты нет собственного счётчика → даём ориентир по бюджету перезаписей
+        w["budget"] = WEAR_BUDGET_REWRITES
+        w["used_pct"] = round(100.0 * rewrites / WEAR_BUDGET_REWRITES, 1)
+        years = None
+        if rate and rate > 0:
+            per_year = rate * 365.0 / capacity_gb
+            years = max(0.0, WEAR_BUDGET_REWRITES - rewrites) / per_year if per_year > 0 else None
+            w["years_left"] = round(years, 1) if years is not None else None
+        if w["used_pct"] >= 90 or (years is not None and years < 0.5):
+            w["level"] = "err"
+        elif w["used_pct"] >= 50 or (years is not None and years < 1.5):
+            w["level"] = "warn"
+    return w
+
+
+def _wear_fs_created(part):
+    """Дата создания ФС (ГГГГ-ММ-ДД) через tune2fs; None если не вышло."""
+    try:
+        r = subprocess.run(["sudo", "-n", "tune2fs", "-l", "/dev/" + part], capture_output=True, text=True, timeout=10,
+                           env=dict(os.environ, LC_ALL="C"))
+        m = re.search(r"Filesystem created:\s+(.+)", r.stdout)
+        if m:
+            import datetime as _dt
+            return _dt.datetime.strptime(" ".join(m.group(1).split()), "%a %b %d %H:%M:%S %Y").strftime("%Y-%m-%d")
+    except Exception:
+        pass
+    return None
+
+
+def _wear_load():
+    try:
+        with open(WEAR_STATE_FILE) as f:
+            d = json.load(f)
+        s = [[int(a), int(b)] for a, b in d.get("samples", [])][-WEAR_KEEP:]
+        with _WEAR_LOCK:
+            _WEAR["samples"] = s
+            _WEAR["since"] = d.get("since")
+            _WEAR["since_ts"] = int(d.get("since_ts") or 0)
+    except Exception:
+        pass
+
+
+def _wear_save():
+    try:
+        with _WEAR_LOCK:
+            d = {"samples": _WEAR["samples"], "since": _WEAR["since"], "since_ts": _WEAR["since_ts"]}
+        tmp = WEAR_STATE_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(d, f)
+        os.replace(tmp, WEAR_STATE_FILE)
+    except Exception:
+        pass
+
+
+def _wear_refresher():
+    _wear_load()
+    time.sleep(120)
+    while True:
+        try:
+            part = _root_fs_part()
+            c = wear_counters(part)
+            if c:
+                now = int(time.time())
+                with _WEAR_LOCK:
+                    s = _WEAR["samples"]
+                    if not s or now - s[-1][0] >= WEAR_SAMPLE_S - 60:
+                        s.append([now, c[0]])
+                        del s[:-WEAR_KEEP]
+                    need_since = (now - _WEAR["since_ts"]) > 86400
+                if need_since:
+                    since = _wear_fs_created(part)
+                    with _WEAR_LOCK:
+                        if since:
+                            _WEAR["since"] = since
+                        _WEAR["since_ts"] = now
+                _wear_save()
+        except Exception:
+            pass
+        time.sleep(WEAR_SAMPLE_S)
+
+
+def wear_snapshot(short_dev, has_health):
+    """Оценка износа для плитки накопителя (short_dev — mmcblk0). None, если счётчиков нет."""
+    c = wear_counters()
+    if not c:
+        return None
+    try:
+        capacity_gb = int(_read_sysfs(f"/sys/block/{short_dev}/size")) * 512 / 1e9
+        uptime_s = float(_read_sysfs("/proc/uptime").split()[0])
+    except (TypeError, ValueError, AttributeError):
+        return None
+    with _WEAR_LOCK:
+        samples, since = list(_WEAR["samples"]), _WEAR["since"]
+    return wear_estimate(samples, time.time(), c[0], c[1], uptime_s, capacity_gb, has_health, since)
+
+
+threading.Thread(target=_wear_refresher, daemon=True).start()
+# <wear-end>
+
+
 def sdcard_health():
     """eMMC has real SMART via extcsd; plain SD cards do not (hardware
     limitation). We detect type and return what's actually readable."""
@@ -1831,6 +1988,12 @@ def sdcard_health():
         sm = sdmon_snapshot()                          # здоровье промышленной карты (если установлен sdmon и карта отвечает)
         if sm:
             info["sdmon"] = sm
+    try:
+        wear = wear_snapshot(short, bool(info.get("sdmon")))     # оценка по объёму записи (для всех карт; ориентир ресурса — только без sdmon)
+        if wear:
+            info["wear"] = wear
+    except Exception:
+        pass
 
     # Try eMMC SMART (only works on eMMC, not SD)
     if card_type.upper() == "MMC":

@@ -1172,6 +1172,17 @@ function renderHealth(h, throttle) {
     items.push(healthRow('ok', 'SD card', detail + ' · SMART не поддерживается'));
   }
 
+  if (!smart && sd && sd.wear) {
+    // Оценка износа по объёму записи на ФС (ядро считает; это не показание самой карты)
+    const w = sd.wear, fmt = x => String(x).replace('.', ',');
+    const gb = x => x >= 1000 ? fmt((x / 1000).toFixed(2)) + ' ТБ' : fmt(Math.round(x * 10) / 10) + ' ГБ';
+    const parts = ['записано ' + gb(w.written_gb) + ' (≈' + fmt(w.rewrites) + ' перезаписей карты' + (w.since ? ', ФС с ' + w.since.split('-').reverse().join('.') : '') + ')'];
+    if (w.rate_gb_day != null) parts.push('сейчас ' + fmt(w.rate_gb_day) + ' ГБ/сут' + (w.rate_src ? ' (' + w.rate_src + ')' : ''));
+    if (w.budget && w.years_left != null) parts.push(w.years_left < 1 ? 'до ориентира менее года' : 'до ориентира ≈' + fmt(w.years_left) + ' г.');
+    if (w.budget) parts.push('ориентир: обычная карта ~' + w.budget + ' перезаписей, использовано ' + fmt(w.used_pct) + ' %');
+    items.push(healthRow(w.level === 'err' ? 'err' : (w.level === 'warn' ? 'warn' : 'ok'), 'Износ по записи (оценка)', parts.join(' · ')));
+  }
+
   if (throttle && throttle.flags) {
     const tf = throttle.flags;
     const everBad = tf.undervolt_ever || tf.freq_capped_ever || tf.throttled_ever || tf.soft_temp_ever;
