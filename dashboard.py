@@ -106,8 +106,8 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "3.10.3"
-RELEASE_DATE = "2026-11-08"
+VERSION = "3.11.0"
+RELEASE_DATE = "2026-11-12"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # SECURITY: допустимый идентификатор сервиса (идёт в filesystem-путь + docker compose).
 _SERVICE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
@@ -842,6 +842,29 @@ def argon_installed():
         return False
     active = sh("systemctl is-active argononed 2>/dev/null").strip()
     return active == "active"
+
+
+DOMHIST_UNIT = "smartcomm-domhist"
+DOMHIST_CONF = "/etc/smartcomm-domhist/config.json"
+
+
+@time_cache(30)
+def domhist_port():
+    """Порт веб-страницы базы истории Domintell, если служба smartcomm-domhist запущена на ЭТОМ контроллере и слушает порт (сейчас — Таурени); иначе None.
+    Кнопка «История Domintell» в шапке показывается только при не-None. Порт — из /etc/smartcomm-domhist/config.json (по умолчанию 8090)."""
+    port = 8090
+    try:
+        with open(DOMHIST_CONF, encoding="utf-8") as f:
+            port = int(json.load(f).get("port", 8090))
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    if not (1 <= port <= 65535):
+        return None
+    if sh("systemctl is-active %s 2>/dev/null" % DOMHIST_UNIT, timeout=3).strip() != "active":
+        return None
+    if not sh("ss -ltn 2>/dev/null | awk 'NR>1 {print $4}' | grep -E ':%d$' | head -1" % port, timeout=3).strip():
+        return None
+    return port
 
 
 @lru_cache(maxsize=1)
@@ -2076,6 +2099,7 @@ def build_status_payload():
         "iridium_installed_ver": iridium_installed_version(),
         "health": f_health.result(),
         "argon_installed": f_argon_in.result(),
+        "domhist_port": domhist_port(),
     }
 
 

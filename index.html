@@ -259,6 +259,10 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M2 7l3-5h14l3 5"/><path d="M2 7v13a1 1 0 0 0 1 1h18a1 1 0 0 0 1-1V7"/><path d="M2 7h20"/><path d="M9 13h6"/></svg>
           <span id="svc-btn-label">Сервисы</span>
         </button>
+        <button class="btn-action c-green" id="btn-domhist" style="display:none" onclick="openDomhist()" title="База истории всех каналов Domintell на этом контроллере: графики, события, CSV (открывается в новой вкладке)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><polyline points="7 15 11 10 14 13 20 6"/></svg>
+          История Domintell
+        </button>
         <button class="btn-action c-mute" id="btn-users" style="display:none" onclick="showUsersModal()" title="Пользователи и аудит-лог (только админ)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
           Пользователи
@@ -1429,6 +1433,9 @@ async function loadStatus() {
     // Argon button visibility — only if Pi with argon module present
     const argonBtn = document.getElementById('btn-argon-help');
     if (argonBtn) argonBtn.style.display = d.argon_installed ? '' : 'none';
+    // «История Domintell» — только если на этом контроллере запущена служба базы истории (smartcomm-domhist)
+    const domBtn = document.getElementById('btn-domhist');
+    if (domBtn) { if (d.domhist_port) { domBtn.dataset.port = d.domhist_port; domBtn.style.display = ''; } else { domBtn.style.display = 'none'; } }
     const parts = [];
     if (ii.proc) {
       parts.push('RAM ' + fmtBytes((ii.proc.rss_kb || 0) * 1024));
@@ -2393,6 +2400,13 @@ window.addEventListener('DOMContentLoaded', () => {
   servicesCountsLoad();
   setInterval(servicesCountsLoad, 30000);
 });
+
+// ===== «История Domintell» — страница базы истории на этом же контроллере (другой порт) =====
+function openDomhist() {
+  const b = document.getElementById('btn-domhist'); if (!b || !b.dataset.port) return;
+  const h = location.hostname.indexOf(':') >= 0 ? '[' + location.hostname + ']' : location.hostname;
+  window.open('http://' + h + ':' + b.dataset.port + '/', '_blank', 'noopener');
+}
 
 // ===== Магазин сервисов — счётчик в шапке =====
 async function servicesCountsLoad() {
