@@ -1710,13 +1710,15 @@ def sdcard_health():
         "hwrev": _read_sysfs(f"{base}/hwrev"),
         "size_h": sh(f"lsblk -dno SIZE {dev} 2>/dev/null").strip(),
     }
-    # Known manufacturer IDs
+    # Known manufacturer IDs (CID MID). 0x9F у SD-карт Kingston (в ядре Linux это CID_MANFID_KINGSTON_SD,
+    # OEM-код «TI» = 0x5449), 0x70 — Kingston eMMC. Раньше 0x9F подписывался «GoodRam» (неверно), а повторный
+    # ключ 0x74 («PNY») перекрывал Transcend.
     manuf_map = {
         "0x000003": "SanDisk", "0x00001b": "Samsung",
         "0x000027": "Phison", "0x000028": "Lexar",
-        "0x000041": "Kingston", "0x000074": "Transcend",
-        "0x00009f": "GoodRam", "0x0000ad": "Longsys",
-        "0x000074": "PNY", "0x0000fe": "Micron",
+        "0x000041": "Kingston", "0x000070": "Kingston",
+        "0x000074": "Transcend", "0x00009f": "Kingston",
+        "0x0000ad": "Longsys", "0x0000fe": "Micron",
     }
     info["manufacturer"] = manuf_map.get(info["manfid"], info["manfid"] or "?")
 
