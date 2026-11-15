@@ -1128,7 +1128,7 @@ function detailHtml(d) {
         <div style="margin-top: 12px">
           <div class="field-label">Открытые порты</div>
           <div class="ports">
-            ${d.open_ports.map(p => '<span class="port-pill"><strong>' + p.port + '</strong>' + (p.name ? ' ' + escapeHtml(p.name) : '') + (p.product ? ' · ' + escapeHtml(p.product) : '') + '</span>').join('')}
+            ${d.open_ports.map(p => '<span class="port-pill"><strong>' + escapeHtml(String(p.port)) + '</strong>' + (p.name ? ' ' + escapeHtml(p.name) : '') + (p.product ? ' · ' + escapeHtml(p.product) : '') + '</span>').join('')}
           </div>
         </div>` : ''}
         <div style="margin-top: 14px">

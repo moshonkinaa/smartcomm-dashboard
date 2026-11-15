@@ -69,6 +69,7 @@ dpkg -s python3-flask          >/dev/null 2>&1 || NEED="$NEED python3-flask"
 dpkg -s python3-flask-compress >/dev/null 2>&1 || NEED="$NEED python3-flask-compress"
 dpkg -s python3-waitress       >/dev/null 2>&1 || NEED="$NEED python3-waitress"
 dpkg -s python3-yaml           >/dev/null 2>&1 || NEED="$NEED python3-yaml"
+dpkg -s python3-cryptography   >/dev/null 2>&1 || NEED="$NEED python3-cryptography"     # 3.13.0: network.py импортирует безусловно
 dpkg -s sqlite3                >/dev/null 2>&1 || NEED="$NEED sqlite3"
 dpkg -s nmap                   >/dev/null 2>&1 || NEED="$NEED nmap"
 dpkg -s snmp                   >/dev/null 2>&1 || NEED="$NEED snmp"
@@ -120,7 +121,7 @@ echo "  $APP_DIR + $DATA_DIR готовы (perms 700/600)"
 # ===== 4. Копирование файлов =====
 echo ""
 echo "[4/6] Копируем файлы дашборда → $APP_DIR/"
-for f in dashboard.py network.py mikrotik.py services.py index.html network.html services.html login.html tokens.css components.css chart.min.js manifest.json sw.js; do
+for f in dashboard.py network.py mikrotik.py services.py fleet_agent.py index.html network.html services.html login.html tokens.css components.css chart.min.js manifest.json sw.js; do
   cp "$SRC_DIR/$f" "$APP_DIR/$f"
   chmod 644 "$APP_DIR/$f"
 done

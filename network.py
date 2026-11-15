@@ -432,7 +432,7 @@ def init_db():
                 c.execute("""INSERT INTO device_credentials
                              (device_id, label, username, password, created_at, updated_at)
                              VALUES (?, 'основной', ?, ?, ?, ?)""",
-                          (row["id"], row["login"], row["password"], now_mig, now_mig))
+                          (row["id"], row["login"], enc_secret(row["password"]), now_mig, now_mig))
         # seed default device types
         now = int(time.time())
         for i, (key, label) in enumerate(DEFAULT_TYPES):
@@ -739,7 +739,8 @@ def auth_create_user(username, password, is_admin=False, must_change=False):
         )
 
 
-def auth_set_password(username, new_password, clear_must_change=True):
+def auth_set_password(username, new_password, clear_must_change=True, keep_sid=None):
+    """3.13.0: смена пароля гасит все сессии пользователя, кроме текущей (keep_sid): украденная cookie больше не живёт 30 суток."""
     salt, h = auth_hash_password(new_password)
     with db() as c:
         c.execute(
@@ -747,6 +748,10 @@ def auth_set_password(username, new_password, clear_must_change=True):
             "must_change_password = ? WHERE username = ?",
             (h, salt, 0 if clear_must_change else 1, username)
         )
+        if keep_sid:
+            c.execute("DELETE FROM auth_sessions WHERE username = ? AND sid != ?", (username, keep_sid))
+        else:
+            c.execute("DELETE FROM auth_sessions WHERE username = ?", (username,))
 
 
 def auth_delete_user(uid):
@@ -1403,7 +1408,7 @@ def create_device():
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?)
             """, (vals["mac"], vals["ip"], vals["hostname"], vals["vendor"],
                   vals["device_type"] or "other", vals["name"], vals["room"],
-                  vals["description"], vals["login"], vals["password"],
+                  vals["description"], vals["login"], enc_secret(vals["password"]),
                   vals["url"], vals["notes"], tags, open_ports,
                   now, now, now))
         _audit("network_device_create", target=str(cur.lastrowid),
@@ -1433,7 +1438,7 @@ def update_device(did):
             v = d[f]
             if f == "mac" and v:
                 v = v.lower()
-            vals.append(v)
+            vals.append(enc_secret(v) if f == "password" else v)       # 3.13.0: пароль устройства — только в зашифрованном виде
             if f != "password":
                 audited[f] = v
             else:

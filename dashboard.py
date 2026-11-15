@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import threading
 import time
@@ -106,8 +107,8 @@ def audit_action(action_name, target_from_path=False, log_details=None):
         return wrapper
     return deco
 
-VERSION = "3.12.1"
-RELEASE_DATE = "2026-11-12"
+VERSION = "3.13.0"
+RELEASE_DATE = "2026-11-15"
 GITHUB_REPO = "moshonkinaa/smartcomm-dashboard"
 # SECURITY: допустимый идентификатор сервиса (идёт в filesystem-путь + docker compose).
 _SERVICE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
@@ -196,6 +197,7 @@ _ADMIN_ONLY_RULES = [
     ({"POST", "PUT", "DELETE", "PATCH"}, _re_admin.compile(r"^/api/services/")),
     ({"POST", "PUT", "DELETE"}, _re_admin.compile(r"^/api/mikrotik/")),
     ({"PUT", "POST", "DELETE"}, _re_admin.compile(r"^/api/iridium/")),
+    ({"GET"}, _re_admin.compile(r"^/api/services/[^/]+/logs")),            # 3.13.0: в логах контейнеров встречаются токены и адреса
     ({"POST"}, _re_admin.compile(r"^/api/action/")),
     ({"POST"}, _re_admin.compile(r"^/api/update/apply$")),
 ]
@@ -208,9 +210,46 @@ def _is_admin_only(method, path):
     return False
 
 
+def _csrf_reject():
+    """3.13.0: изменяющие запросы принимаем только со своей страницы. Cookie сессии не различает порты одного адреса,
+    поэтому страница любого соседнего сервиса (n8n, Jellyfin, :8090…) могла бы слать POST от имени администратора.
+    Браузер на POST всегда шлёт Origin: он должен совпасть с Host. Без Origin (curl, скрипты) пропускаем, если браузер
+    не пометил запрос как межсайтовый (Sec-Fetch-Site)."""
+    if request.method in ("GET", "HEAD", "OPTIONS"):
+        return False
+    o = request.headers.get("Origin")
+    if o:
+        try:
+            from urllib.parse import urlparse
+            return urlparse(o).netloc.lower() != (request.host or "").lower()
+        except Exception:
+            return True
+    return request.headers.get("Sec-Fetch-Site") in ("cross-site", "same-site")
+
+
+_MUST_CHANGE_CACHE = {}
+
+
+def _must_change(username):
+    """Флаг «сменить пароль» с короткой памятью (шлюз вызывается на каждый запрос)."""
+    now = time.time()
+    hit = _MUST_CHANGE_CACHE.get(username)
+    if hit and now - hit[0] < 10:
+        return hit[1]
+    try:
+        u = network_bp.auth_get_user(username)
+        flag = bool(u and u.get("must_change_password"))
+    except Exception:
+        flag = False
+    _MUST_CHANGE_CACHE[username] = (now, flag)
+    return flag
+
+
 @app.before_request
 def _global_auth_gate():
     p = request.path
+    if _csrf_reject():
+        return jsonify({"ok": False, "error": "межсайтовый запрос отклонён"}), 403
     if p in _AUTH_PUBLIC_PATHS:
         return None
     if request.method == "OPTIONS":
@@ -222,6 +261,13 @@ def _global_auth_gate():
             return jsonify({"ok": False, "error": "unauthorized"}), 401
         return redirect("/login?next=" + p)
     request.auth_user = sess
+    # 3.13.0: пока не сменён стартовый пароль (admin/admin), сервер пускает только на /api/auth/* и на чтение.
+    # Раньше флаг проверял один интерфейс — по API с admin/admin можно было ставить сервисы от root.
+    if (request.method not in ("GET", "HEAD") and not p.startswith("/api/auth/")
+            and _must_change(sess["username"])):
+        return jsonify({"ok": False, "error": "сначала смените стартовый пароль", "must_change_password": True}), 403
+    if request.method in ("GET", "HEAD") and _is_admin_only(request.method, p) and _must_change(sess["username"]):
+        return jsonify({"ok": False, "error": "сначала смените стартовый пароль", "must_change_password": True}), 403
     # Admin-gate для мутаций + секретов. Non-admin юзеры ("клиенты") — 403.
     if _is_admin_only(request.method, p):
         try:
@@ -399,9 +445,26 @@ def _metrics_hydrate():
 
 
 def sh(cmd, timeout=5):
+    """3.13.0: по таймауту убиваем всю группу процессов (sh + sudo + команда). Раньше subprocess.run убивал только sh,
+    а на Python 3.7.3 (Buster) после этого ещё и ждал закрытия канала внуком — зависший `sudo smartctl` блокировал поток пула навсегда."""
+    p = None
     try:
-        return subprocess.run(cmd, shell=True, capture_output=True,
-                              text=True, timeout=timeout).stdout.strip()
+        p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             universal_newlines=True, start_new_session=True)
+        out, _ = p.communicate(timeout=timeout)
+        return (out or "").strip()
+    except subprocess.TimeoutExpired:
+        for sig in (signal.SIGTERM, signal.SIGKILL):         # sudo пересылает SIGTERM своей команде; SIGKILL — для оставшихся
+            try:
+                os.killpg(p.pid, sig)
+            except Exception:
+                pass
+            try:
+                p.communicate(timeout=2)
+                break
+            except Exception:
+                continue
+        return ""
     except Exception:
         return ""
 
@@ -1069,6 +1132,9 @@ def _refresh_iridium_version():
     c = _IRIDIUM_VERSION_CACHE
     if c["value"] is not None:
         return
+    if not os.path.exists(IR_BIN) or time.time() < c.get("next", 0):      # 3.13.0: узлы без iRidium не дёргают sudo каждые 30 с
+        return
+    c["next"] = time.time() + 600
     out = sh(f"sudo {IR_BIN} --version 2>&1 | head -1", timeout=10)
     m = re.search(r"Server Version:\s*(.+?):(\d+)\s*\(([^)]+)\)", out)
     if m:
@@ -1389,9 +1455,14 @@ def _ir_get(path):
         except UnicodeDecodeError:
             text = raw.decode("cp1251", "replace")
         return _json.loads(text)
-    except Exception:
-        with _IR_SESSION["lock"]:
-            _IR_SESSION["cookie"] = None
+    except Exception as e:
+        # 3.13.0: таймаут/сетевой сбой одного из шести запросов НЕ сбрасывает общую сессию (иначе — повторный вход в iRidium
+        # каждые 30 с). Сбрасываем при 401/403 и при ответе не-JSON (редирект на страницу входа = сессия умерла).
+        import urllib.error as _ue
+        bad_session = (isinstance(e, _ue.HTTPError) and e.code in (401, 403)) or isinstance(e, ValueError)
+        if bad_session:
+            with _IR_SESSION["lock"]:
+                _IR_SESSION["cookie"] = None
         return None
 
 
@@ -2312,6 +2383,10 @@ def put_mikrotik_settings():
     # Сброс кеша чтобы сразу подхватить новые креды
     with mt._CACHE_LOCK:
         mt._CACHE.clear()
+    try:                                       # 3.13.0: иначе «проверка» шла по СТАРОЙ живой сессии и показывала OK при неверном пароле
+        mt._api_drop(); mt._backoff_ok()
+    except Exception:
+        pass
     test = mt.mt_status_snapshot(network_bp)
     return jsonify({"ok": True, "test": test})
 
@@ -2593,7 +2668,8 @@ def api_auth_change_password():
         return jsonify({"ok": False, "error": "Неверный текущий пароль"}), 400
     if len(new_pw) < 8:
         return jsonify({"ok": False, "error": "Минимум 8 символов"}), 400
-    network_bp.auth_set_password(sess["username"], new_pw, clear_must_change=True)
+    network_bp.auth_set_password(sess["username"], new_pw, clear_must_change=True, keep_sid=sess.get("sid"))
+    _MUST_CHANGE_CACHE.pop(sess["username"], None)
     network_bp.auth_log(sess["username"], _client_ip(),
                         "change_password", result="success")
     return jsonify({"ok": True})
@@ -2653,6 +2729,7 @@ def api_auth_users_reset_password(uid):
     # Помечаем must_change чтобы юзер сменил при следующем входе
     with network_bp.db() as c:
         c.execute("UPDATE auth_users SET must_change_password=1 WHERE id=?", (uid,))
+    _MUST_CHANGE_CACHE.pop(row["username"], None)
     network_bp.auth_log(request.auth_user["username"], _client_ip(),
                         "reset_user_password", target=row["username"])
     return jsonify({"ok": True})
@@ -2851,6 +2928,8 @@ def api_services_logs_stream(service_id):
     # Limit since на максимум 6h чтобы не было загрузки 100MB логов на старте
     if since not in ("5m", "15m", "30m", "1h", "3h", "6h"):
         since = "30m"
+    if request.method == "HEAD":                # 3.13.0: HEAD не запускает генератор, а значит слот уже не освободился бы (4 HEAD = live-логи недоступны)
+        return Response("", mimetype="text/event-stream")
     with _SSE_LOCK:
         if _SSE_ACTIVE[0] >= _SSE_MAX:
             return jsonify({"ok": False, "error": "слишком много live-стримов, закройте лишние"}), 503
@@ -3440,6 +3519,13 @@ def backup_inventory():
     """Daily backup of inventory.db with retention."""
     if not INVENTORY_DB.exists():
         return
+    _cleanup_old_backups()                     # 3.13.0: чистка ДО бэкапа — на полном диске она раньше не достигалась никогда
+    try:                                       # и бэкап не чаще раза в ~20 ч (раньше новая полная копия БД на КАЖДЫЙ рестарт службы)
+        newest = max((f.stat().st_mtime for f in BACKUP_DIR.glob("inventory_*.db")), default=0)
+        if time.time() - newest < 20 * 3600:
+            return
+    except Exception:
+        pass
     now = time.strftime("%Y%m%d_%H%M%S")
     dst = BACKUP_DIR / f"inventory_{now}.db"
     try:
@@ -3453,7 +3539,14 @@ def backup_inventory():
         src.close()
     except Exception as e:
         app.logger.error(f"backup failed: {e}")
+        try:
+            dst.unlink()                       # недописанная копия на заполненном диске только мешает
+        except Exception:
+            pass
         return
+
+
+def _cleanup_old_backups():
     # cleanup old backups. ВАЖНО: чистим не только inventory_*.db, но и
     # pre-migration бекапы (inventory.pre-migration-*.db — точка, не подчёркивание)
     # и app-pre-* (каталоги полной копии app при апдейтах) — раньше они не попадали

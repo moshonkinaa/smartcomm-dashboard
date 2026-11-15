@@ -72,7 +72,11 @@
 // не '//host' и не '/\\host'), иначе ?next=//evil.com увёл бы оператора после входа.
 function safeNext() {
   const n = new URLSearchParams(location.search).get('next') || '/';
-  return (/^\/[^/\\]/.test(n) || n === '/') ? n : '/';
+  // 3.13.0: сверяем после разбора браузером (он выбрасывает табуляцию/перевод строки: '/%09/evil' иначе превращалось в '//evil')
+  try {
+    const u = new URL(n, location.origin);
+    return u.origin === location.origin ? (u.pathname + u.search + u.hash) : '/';
+  } catch (e) { return '/'; }
 }
 
 // Если уже залогинены — редирект на главную
